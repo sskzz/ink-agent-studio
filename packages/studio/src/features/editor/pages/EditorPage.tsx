@@ -2,10 +2,12 @@ import type { LucideIcon } from "lucide-react";
 import { Archive, ArrowLeft, BookOpenText, Bot, Box, ChevronLeft, ChevronRight, CircleDotDashed, Eye, FileText, Flag, FolderOpen, Layers3, ListTree, MapPin, MessageCircle, Package, PencilLine, Plus, Settings2, Sparkles, Tags, UserRound, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { getWorkspaceBookDetail } from "@/shared/api/workspaceApi";
+import type { WorkspaceBookDetail } from "@/shared/api/workspaceApi";
 
 type EditorTab = "info" | "chapters" | "drafts";
 type AssistantTab = "chat" | "inspiration";
-type EditorPanelKind = "detail" | "empty" | "chapter" | "draft";
+type EditorPanelKind = "detail" | "empty" | "chapter" | "draft" | "role-manager" | "create-entity";
 
 interface EditorField {
   hint?: string;
@@ -15,6 +17,9 @@ interface EditorField {
 
 interface EditorNavItem {
   chips?: string[];
+  createDescriptionLabel?: string;
+  createNameLabel?: string;
+  createPlaceholder?: string;
   fields?: EditorField[];
   icon: LucideIcon;
   id: string;
@@ -26,6 +31,7 @@ interface EditorNavItem {
 }
 
 interface EditorNavGroup {
+  addItemId?: string;
   id: string;
   items: EditorNavItem[];
   title: string;
@@ -41,274 +47,50 @@ const editorTabs: Array<{ id: EditorTab; label: string }> = [
   { id: "drafts", label: "草稿" }
 ];
 
-/**
- * 左侧作品属性导航。
- * 这里先使用前端 mock 数据，后续接入后端时可以替换为作品目录中的 md/json 文件索引。
- */
-const editorNavigation: Record<EditorTab, EditorNavGroup[]> = {
-  info: [
-    {
-      id: "theme",
-      title: "主题",
-      items: [
-        {
-          chips: ["旧港", "来信", "轻悬疑", "单元事件", "慢热感情线"],
-          icon: Tags,
-          id: "tags",
-          kind: "detail",
-          meta: "5 个标签",
-          paragraphs: ["标签用于约束后续 AI 续写方向，后端接入后可由模型自动补全和去重。"],
-          summary: "作品关键词与内容方向。",
-          title: "标签"
-        },
-        {
-          fields: [
-            { label: "一句话简介", value: "旧港档案管理员收到来自十年前的信，在夜班邮差的帮助下追查白银儿童失踪传闻。" },
-            { label: "读者承诺", value: "温柔收束、轻悬疑、慢热信任关系。" }
-          ],
-          icon: FileText,
-          id: "brief",
-          kind: "detail",
-          meta: "brief.md",
-          paragraphs: ["简介会作为每次章节生成的高优先级上下文，避免故事越写越偏。"],
-          summary: "作品简介、卖点和读者承诺。",
-          title: "简介"
-        },
-        {
-          fields: [
-            { label: "第一卷目标", value: "确认旧港信件规则，找到白银儿童事件第一位幸存者。" },
-            { label: "阶段节奏", value: "1-3 章立钩子，4-8 章查证据，9-12 章收束单元事件。" }
-          ],
-          icon: ListTree,
-          id: "outline",
-          kind: "detail",
-          meta: "outline.md",
-          paragraphs: ["总纲用于控制长线伏笔、章节节奏和主要转折。"],
-          summary: "主线规划、卷纲和伏笔回收节奏。",
-          title: "总纲"
-        }
-      ]
-    },
-    {
-      id: "settings",
-      title: "设置",
-      items: [
-        {
-          fields: [
-            { label: "作品名称", value: "雾港来信" },
-            { label: "篇幅类型", value: "短篇" },
-            { label: "叙事人称", value: "第三人称" },
-            { label: "频道/受众", value: "男频 · 轻悬疑" },
-            { label: "主角性别", value: "女" },
-            { label: "主角姓名", value: "林砚" },
-            { label: "小说计划字数", value: "600,000 字", hint: "未填写时由 AI 根据题材估算。" },
-            { label: "每章节计划字数", value: "3,000 字", hint: "未填写时由 AI 按节奏补全。" },
-            { label: "写作风格", value: "旧港雾色 · 温柔悬疑" },
-            { label: "世界观文件", value: "worldview.md", hint: "后续接入文件上传和解析。" }
-          ],
-          icon: Settings2,
-          id: "basic-settings",
-          kind: "detail",
-          meta: "已保存到本地",
-          paragraphs: ["这里补齐参考图中没有展开但写作系统需要长期携带的基础作品属性。"],
-          summary: "篇幅、人称、主角、字数计划与风格配置。",
-          title: "基础设置"
-        }
-      ]
-    },
-    {
-      id: "characters",
-      title: "角色",
-      items: [
-        {
-          fields: [
-            { label: "定位", value: "旧港区档案管理员，主要调查视角。" },
-            { label: "当前状态", value: "已确认异常信件并开始怀疑童年记忆缺口。" }
-          ],
-          icon: UserRound,
-          id: "linyan",
-          kind: "detail",
-          meta: "主要角色",
-          paragraphs: ["写作时保持林砚的克制、观察力和轻微幽默感，不要把她写成战斗型角色。"],
-          summary: "主角，档案管理员。",
-          title: "林砚"
-        },
-        {
-          fields: [
-            { label: "定位", value: "夜班邮差，规则见证者和线索提供者。" },
-            { label: "当前状态", value: "知道旧港雾气和信件的部分规则，但不能一次性说明真相。" }
-          ],
-          icon: UserRound,
-          id: "shendu",
-          kind: "detail",
-          meta: "主要角色",
-          paragraphs: ["沈渡可以隐瞒关键线索，但每次隐瞒都必须有保护他人或遵守规则的理由。"],
-          summary: "夜班邮差，慢热关系线核心。",
-          title: "沈渡"
-        },
-        {
-          fields: [
-            { label: "定位", value: "旧港诊所医生，现实证据提供者。" },
-            { label: "当前状态", value: "保存部分旧案病历，认识沈渡但暂未说明关系。" }
-          ],
-          icon: UserRound,
-          id: "doctor",
-          kind: "detail",
-          meta: "次要角色",
-          paragraphs: ["顾医生负责把异常事件拉回现实证据层，台词要稳，不故弄玄虚。"],
-          summary: "诊所医生，证据线人物。",
-          title: "顾医生"
-        },
-        {
-          icon: UsersRound,
-          id: "unnamed-role",
-          kind: "empty",
-          meta: "待补全",
-          summary: "预留次要角色位置。",
-          title: "未命名"
-        }
-      ]
-    },
-    {
-      id: "background",
-      title: "背景",
-      items: [
-        {
-          fields: [
-            { label: "时代气质", value: "近现代城市边缘区，旧工业港与百货档案并存。" },
-            { label: "叙事底色", value: "潮湿、安静、带一点温柔怪谈感。" }
-          ],
-          icon: FolderOpen,
-          id: "background-world",
-          kind: "detail",
-          meta: "worldview.md",
-          paragraphs: ["背景信息用于控制场景质感，避免章节忽然偏向热血战斗或宏大玄幻。"],
-          summary: "故事发生的时代、城市和社会底色。",
-          title: "背景"
-        }
-      ]
-    },
-    {
-      id: "faction",
-      title: "势力",
-      items: [
-        {
-          icon: Flag,
-          id: "oldport-faction",
-          kind: "empty",
-          meta: "暂无设定",
-          paragraphs: ["后续可以在这里补充旧港邮政、诊所、百货档案室、白银儿童相关组织等势力关系。"],
-          summary: "组织、阵营和关系网。",
-          title: "势力"
-        }
-      ]
-    },
-    {
-      id: "locations",
-      title: "地点",
-      items: [
-        {
-          fields: [
-            { label: "旧港百货", value: "主角工作的档案空间，地下档案室是异常信件出现点。" },
-            { label: "三号码头", value: "白银儿童传闻的核心地点，雾气最重。" },
-            { label: "旧港诊所", value: "现实证据与旧案病历的保存点。" }
-          ],
-          icon: MapPin,
-          id: "location-list",
-          kind: "detail",
-          meta: "3 个地点",
-          paragraphs: ["地点会影响章节氛围和可用线索，后续可接入地图或 md 文件。"],
-          summary: "关键场景和可用线索。",
-          title: "地点"
-        }
-      ]
-    },
-    {
-      id: "items",
-      title: "物品",
-      items: [
-        {
-          fields: [
-            { label: "旧港来信", value: "来自十年前的信，字迹会随见证人数增多而褪色。" },
-            { label: "百货录", value: "档案室中没有编号的旧册，第一页异常干燥。" },
-            { label: "潮湿邮戳", value: "下一章需要推进的关键物证。" }
-          ],
-          icon: Package,
-          id: "important-items",
-          kind: "detail",
-          meta: "3 个物品",
-          paragraphs: ["物品列表用于防止关键道具丢失，也便于 AI 在续写时回收伏笔。"],
-          summary: "关键道具、信件和证物。",
-          title: "物品"
-        }
-      ]
-    }
-  ],
-  chapters: [
-    {
-      id: "outline-management",
-      title: "细纲管理",
-      items: [
-        {
-          fields: [
-            { label: "下一章标题", value: "04 潮湿的邮戳" },
-            { label: "章节任务", value: "林砚发现旧报纸与现有信件的日期冲突。" },
-            { label: "情绪目标", value: "压迫感略升，但结尾保留温柔缓冲。" }
-          ],
-          icon: Layers3,
-          id: "chapter-plan",
-          kind: "detail",
-          meta: "待生成",
-          paragraphs: ["细纲会作为继续写作的直接输入，后续点击“AI续写”时从这里读取。"],
-          summary: "下一章目标、冲突和情绪节奏。",
-          title: "细纲管理"
-        }
-      ]
-    },
-    {
-      id: "chapters",
-      title: "章节",
-      items: [
-        {
-          fields: [
-            { label: "章节字数", value: "3,472 字" },
-            { label: "已写总字数", value: "10,436 字" },
-            { label: "当前状态", value: "可继续写作" }
-          ],
-          icon: BookOpenText,
-          id: "chapter-01",
-          kind: "chapter",
-          meta: "3,472 字",
-          paragraphs: ["林砚在旧港百货地下档案室找到没有编号的百货录，第一页夹着来自十年前的信。"],
-          summary: "第一章正文与续写入口。",
-          title: "第一章"
-        }
-      ]
-    }
-  ],
-  drafts: [
-    {
-      id: "draft-box",
-      title: "草稿箱",
-      items: [
-        {
-          icon: Archive,
-          id: "draft-empty",
-          kind: "draft",
-          meta: "暂无内容",
-          paragraphs: ["草稿箱用于保存 AI 生成但尚未采纳的版本。当前第一版只预留页面，不做真实保存。"],
-          summary: "暂时没有内容，快来添加吧。",
-          title: "草稿箱"
-        }
-      ]
-    }
-  ]
-};
-
 const defaultItemByTab: Record<EditorTab, string> = {
-  info: "oldport-faction",
+  info: "basic-settings",
   chapters: "chapter-plan",
   drafts: "draft-empty"
+};
+
+const specialEditorItems: Record<string, EditorNavItem> = {
+  "manage-characters": {
+    icon: UsersRound,
+    id: "manage-characters",
+    kind: "role-manager",
+    summary: "管理主要角色和次要角色，当前只生成页面结构，不执行真实新增。",
+    title: "角色"
+  },
+  "create-faction": {
+    createDescriptionLabel: "属性描述",
+    createNameLabel: "势力名称",
+    createPlaceholder: "例如：主角所在组织 / 对立阵营",
+    icon: Flag,
+    id: "create-faction",
+    kind: "create-entity",
+    summary: "新增势力设定，后续接入后端后会写入势力 md/json 文件。",
+    title: "新增势力"
+  },
+  "create-location": {
+    createDescriptionLabel: "地点描述",
+    createNameLabel: "地点名称",
+    createPlaceholder: "例如：主城 / 秘密据点",
+    icon: MapPin,
+    id: "create-location",
+    kind: "create-entity",
+    summary: "新增地点设定，记录场景气质、可用线索和章节使用限制。",
+    title: "新增地点"
+  },
+  "create-item": {
+    createDescriptionLabel: "物品描述",
+    createNameLabel: "物品名称",
+    createPlaceholder: "例如：关键道具 / 伏笔物品",
+    icon: Package,
+    id: "create-item",
+    kind: "create-entity",
+    summary: "新增物品设定，记录关键道具、证物和伏笔回收方式。",
+    title: "新增物品"
+  }
 };
 
 const assistantMessages = [
@@ -328,9 +110,289 @@ function flattenGroups(groups: EditorNavGroup[]) {
   return groups.flatMap((group) => group.items);
 }
 
+function formatNumber(value: number) {
+  return new Intl.NumberFormat("zh-CN").format(value);
+}
+
+function createFileNavItem(file: WorkspaceBookDetail["coreFiles"][number], icon: LucideIcon): EditorNavItem {
+  return {
+    fields: [
+      { label: "文件", value: file.fileName },
+      { label: "摘要", value: file.summary || "暂无摘要" }
+    ],
+    icon,
+    id: `core-${file.id}`,
+    kind: "detail",
+    meta: file.fileName,
+    paragraphs: [file.markdown || "暂无 Markdown 内容。"],
+    summary: file.summary || "后端暂未返回该文件摘要。",
+    title: file.title
+  };
+}
+
+function createBookAwareNavigation(book: WorkspaceBookDetail): Record<EditorTab, EditorNavGroup[]> {
+  const outlineFile = book.coreFiles.find((file) => file.id === "outline");
+  const briefFile = book.coreFiles.find((file) => file.id === "brief");
+  const coreFileItems: EditorNavItem[] = book.coreFiles.length > 0
+    ? book.coreFiles.map((file) => createFileNavItem(file, file.id === "outline" ? ListTree : FileText))
+    : [
+        {
+          icon: FileText,
+          id: "core-empty",
+          kind: "empty",
+          meta: "暂无文件",
+          paragraphs: ["后端暂未返回核心文件。"],
+          summary: "后端暂未返回故事基石、卷纲规划、当前状态或伏笔池。",
+          title: "核心文件"
+        }
+      ];
+
+  const characterItems: EditorNavItem[] = book.characters.length > 0
+    ? book.characters.map((character) => ({
+        fields: [
+          { label: "角色类型", value: `${character.role}角色` },
+          { label: "角色定位", value: character.identity }
+        ],
+        icon: UserRound,
+        id: `character-${character.id}`,
+        kind: "detail",
+        meta: `${character.role}角色`,
+        paragraphs: [character.markdown || "暂无角色 Markdown 内容。"],
+        summary: character.identity || "后端暂未返回角色定位。",
+        title: character.name
+      }))
+    : [
+        {
+          icon: UsersRound,
+          id: "characters-empty",
+          kind: "empty",
+          meta: "暂无角色",
+          paragraphs: ["后端暂未返回角色列表。点击加号可进入角色新增页面结构。"],
+          summary: "暂无角色数据。",
+          title: "角色"
+        }
+      ];
+
+  return {
+    info: [
+      {
+        id: "theme",
+        title: "主题",
+        items: [
+          {
+            fields: [
+              { label: "作品名称", value: book.title },
+              { label: "作品类型", value: book.genre || "AI 自动生成" }
+            ],
+            icon: Tags,
+            id: "tags",
+            kind: "detail",
+            meta: "后端作品",
+            paragraphs: ["标签和关键词接口暂未接入，当前仅展示后端已返回的作品名称与类型。"],
+            summary: "作品关键词、题材和内容方向。",
+            title: "标签"
+          },
+          {
+            fields: [
+              { label: "文件", value: briefFile?.fileName ?? "brief.md" },
+              { label: "摘要", value: briefFile?.summary ?? "暂无摘要" }
+            ],
+            icon: FileText,
+            id: "brief",
+            kind: "detail",
+            meta: briefFile?.fileName ?? "暂无文件",
+            paragraphs: [book.brief || "后端暂未返回故事基石内容。"],
+            summary: "作品简介、卖点和读者承诺。",
+            title: "简介"
+          },
+          {
+            fields: [
+              { label: "文件", value: outlineFile?.fileName ?? "outline.md" },
+              { label: "摘要", value: outlineFile?.summary ?? "暂无摘要" }
+            ],
+            icon: ListTree,
+            id: "outline",
+            kind: outlineFile ? "detail" : "empty",
+            meta: outlineFile?.fileName ?? "暂无文件",
+            paragraphs: [outlineFile?.markdown ?? "后端暂未返回卷纲规划内容。"],
+            summary: "主线规划、卷纲和伏笔回收节奏。",
+            title: "总纲"
+          }
+        ]
+      },
+      {
+        id: "settings",
+        title: "设置",
+        items: [
+          {
+            fields: [
+              { label: "作品名称", value: book.title },
+              { label: "人称", value: book.attributes.narrationPerspective },
+              { label: "频道", value: book.attributes.channel },
+              { label: "主角性别", value: book.attributes.protagonistGender },
+              { label: "主角姓名", value: book.attributes.protagonistName },
+              {
+                label: "小说计划字数",
+                value: book.attributes.plannedWords ? `${formatNumber(book.attributes.plannedWords)} 字` : "AI 自动生成",
+                hint: "未填写时由 AI 根据题材估算。"
+              },
+              {
+                label: "每章节计划字数",
+                value: book.attributes.chapterWords ? `${formatNumber(book.attributes.chapterWords)} 字` : "AI 自动生成",
+                hint: "未填写时由 AI 按节奏补全。"
+              },
+              { label: "写作风格", value: book.writingStyleId || "AI 自动选择" },
+              { label: "世界观文件", value: book.attributes.worldFileName }
+            ],
+            icon: Settings2,
+            id: "basic-settings",
+            kind: "detail",
+            meta: "后端作品详情",
+            paragraphs: ["这里展示后端作品详情返回的基础属性；未填写字段由后续 AI 初始化流程补全。"],
+            summary: "人称、频道、主角、字数计划与风格配置。",
+            title: "基础设置"
+          }
+        ]
+      },
+      {
+        id: "core-files",
+        title: "核心文件",
+        items: coreFileItems
+      },
+      {
+        id: "characters",
+        title: "角色",
+        addItemId: "manage-characters",
+        items: characterItems
+      },
+      {
+        id: "background",
+        title: "背景",
+        items: [
+          {
+            fields: [
+              { label: "文件", value: book.worldview.fileName },
+              { label: "摘要", value: book.worldview.summary || "暂无摘要" }
+            ],
+            icon: FolderOpen,
+            id: "background-world",
+            kind: "detail",
+            meta: book.worldview.fileName,
+            paragraphs: [book.worldview.markdown || "后端暂未返回世界观内容。"],
+            summary: "故事发生的时代、地点和世界规则。",
+            title: "背景"
+          }
+        ]
+      },
+      {
+        id: "faction",
+        title: "势力",
+        addItemId: "create-faction",
+        items: [
+          {
+            icon: Flag,
+            id: "faction-empty",
+            kind: "empty",
+            meta: "暂无数据",
+            paragraphs: ["势力列表接口尚未接入编辑器页，当前不再显示前端示例势力。"],
+            summary: "组织、阵营和关系网。",
+            title: "势力"
+          }
+        ]
+      },
+      {
+        id: "locations",
+        title: "地点",
+        addItemId: "create-location",
+        items: [
+          {
+            icon: MapPin,
+            id: "locations-empty",
+            kind: "empty",
+            meta: "暂无数据",
+            paragraphs: ["地点列表接口尚未接入编辑器页，当前不再显示前端示例地点。"],
+            summary: "关键场景和可用线索。",
+            title: "地点"
+          }
+        ]
+      },
+      {
+        id: "items",
+        title: "物品",
+        addItemId: "create-item",
+        items: [
+          {
+            icon: Package,
+            id: "items-empty",
+            kind: "empty",
+            meta: "暂无数据",
+            paragraphs: ["物品列表接口尚未接入编辑器页，当前不再显示前端示例物品。"],
+            summary: "关键道具、信件和证物。",
+            title: "物品"
+          }
+        ]
+      }
+    ],
+    chapters: [
+      {
+        id: "outline-management",
+        title: "细纲管理",
+        items: [
+          {
+            icon: Layers3,
+            id: "chapter-plan",
+            kind: "empty",
+            meta: "暂无细纲",
+            paragraphs: ["章节细纲接口尚未接入编辑器页。"],
+            summary: "下一章目标、冲突和情绪节奏。",
+            title: "细纲管理"
+          }
+        ]
+      },
+      {
+        id: "chapters",
+        title: "章节",
+        items: [
+          {
+            fields: [
+              { label: "当前章节", value: book.progress.currentChapter },
+              { label: "已写总字数", value: `${formatNumber(book.progress.writtenWords)} 字` },
+              { label: "已写章节", value: `${book.progress.writtenChapters}/${book.progress.plannedChapters || "AI 自动生成"}` }
+            ],
+            icon: BookOpenText,
+            id: "current-chapter",
+            kind: "chapter",
+            meta: "后端进度",
+            paragraphs: ["章节正文接口尚未接入编辑器页，当前不显示前端示例正文。"],
+            summary: "当前章节正文与续写入口。",
+            title: "当前章节"
+          }
+        ]
+      }
+    ],
+    drafts: [
+      {
+        id: "draft-box",
+        title: "草稿箱",
+        items: [
+          {
+            icon: Archive,
+            id: "draft-empty",
+            kind: "draft",
+            meta: "暂无内容",
+            paragraphs: ["草稿箱用于保存 AI 生成但尚未采纳的版本，后续接入后端持久化。"],
+            summary: "暂时没有内容。",
+            title: "草稿箱"
+          }
+        ]
+      }
+    ]
+  };
+}
+
 /**
  * 继续写作页面。
- * 当前阶段只生成前端页面：所有内容都是 mock 数据，接口接入点保留在作品属性、章节、AI 对话输入框和灵感卡片处。
+ * 当前阶段保留编辑器页面结构，顶部作品状态和基础设置会读取来源作品详情。
  */
 export function EditorPage() {
   const location = useLocation();
@@ -339,13 +401,14 @@ export function EditorPage() {
   const [assistantTab, setAssistantTab] = useState<AssistantTab>("chat");
   const [isAssistantCollapsed, setIsAssistantCollapsed] = useState(false);
   const [isScrollbarVisible, setIsScrollbarVisible] = useState(false);
+  const [isBookLoading, setIsBookLoading] = useState(false);
+  const [bookDetail, setBookDetail] = useState<WorkspaceBookDetail | null>(null);
+  const [bookLoadMessage, setBookLoadMessage] = useState("");
   const scrollbarTimerRef = useRef<number | null>(null);
 
   const routeState = location.state as EditorRouteState | null;
-  const backBookId = routeState?.fromBookId ?? "mist-harbor-letter";
-  const currentGroups = editorNavigation[activeTab];
-  const currentItems = flattenGroups(currentGroups);
-  const activeItem = currentItems.find((item) => item.id === activeItemId) ?? currentItems[0] ?? editorNavigation.info[0].items[0];
+  const backBookId = routeState?.fromBookId ?? "";
+  const backLinkState = backBookId ? { bookId: backBookId, view: "detail" } : undefined;
 
   useEffect(() => {
     return () => {
@@ -354,6 +417,45 @@ export function EditorPage() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadBookDetail() {
+      setBookLoadMessage("");
+      setBookDetail(null);
+
+      if (!backBookId) {
+        setIsBookLoading(false);
+        setBookLoadMessage("请从作品详情页点击“继续写作”进入编辑器。");
+        return;
+      }
+
+      try {
+        setIsBookLoading(true);
+        const detail = await getWorkspaceBookDetail(backBookId);
+
+        if (!ignore) {
+          setBookDetail(detail);
+        }
+      } catch (error) {
+        if (!ignore) {
+          setBookDetail(null);
+          setBookLoadMessage(`作品详情读取失败：${toMessage(error)}`);
+        }
+      } finally {
+        if (!ignore) {
+          setIsBookLoading(false);
+        }
+      }
+    }
+
+    void loadBookDetail();
+
+    return () => {
+      ignore = true;
+    };
+  }, [backBookId]);
 
   function revealScrollbar() {
     setIsScrollbarVisible(true);
@@ -372,6 +474,58 @@ export function EditorPage() {
     setActiveItemId(defaultItemByTab[tab]);
   }
 
+  if (isBookLoading || !bookDetail) {
+    return (
+      <div className="page novel-editor-page">
+        <header className="novel-editor-topbar">
+          <Link
+            className="novel-editor-back"
+            to="/workspace"
+            state={backLinkState}
+            aria-label="退出继续写作页面并返回作品详情"
+          >
+            <ArrowLeft size={15} />
+            <span>退出</span>
+          </Link>
+
+          <div className="novel-editor-book-meta" aria-label="作品基础状态">
+            <strong>{isBookLoading ? "正在读取作品" : "未选择作品"}</strong>
+            {bookLoadMessage ? <span>{bookLoadMessage}</span> : <span>正在从后端读取作品详情...</span>}
+          </div>
+        </header>
+
+        <div className="novel-editor-frame">
+          <main className="novel-editor-center" aria-label="继续写作空状态">
+            <article className="novel-editor-card">
+              <header className="novel-editor-card-head">
+                <div>
+                  <h2>{isBookLoading ? "正在加载作品上下文" : "暂无可编辑作品"}</h2>
+                  <p>
+                    {isBookLoading
+                      ? "正在读取后端作品详情、核心文件和基础属性。"
+                      : "继续写作页需要从作品详情进入；如果作品接口返回为空，这里不会再显示前端示例数据。"}
+                  </p>
+                </div>
+              </header>
+              <div className="novel-editor-card-body empty">
+                <div className="novel-editor-empty">
+                  <CircleDotDashed size={18} />
+                  <strong>{isBookLoading ? "读取中" : "没有作品数据"}</strong>
+                  <p>{bookLoadMessage || "请回到作品库创建或选择一本作品后，再点击“继续写作”。"}</p>
+                </div>
+              </div>
+            </article>
+          </main>
+        </div>
+      </div>
+    );
+  }
+
+  const navigation = createBookAwareNavigation(bookDetail);
+  const currentGroups = navigation[activeTab];
+  const currentItems = flattenGroups(currentGroups);
+  const activeItem = currentItems.find((item) => item.id === activeItemId) ?? specialEditorItems[activeItemId] ?? currentItems[0] ?? navigation.info[0].items[0];
+
   return (
     <div
       className={`page novel-editor-page${isAssistantCollapsed ? " assistant-collapsed" : ""}${isScrollbarVisible ? " scrollbar-visible" : ""}`}
@@ -382,7 +536,7 @@ export function EditorPage() {
         <Link
           className="novel-editor-back"
           to="/workspace"
-          state={{ bookId: backBookId, view: "detail" }}
+          state={backLinkState}
           aria-label="退出继续写作页面并返回作品详情"
         >
           <ArrowLeft size={15} />
@@ -390,13 +544,14 @@ export function EditorPage() {
         </Link>
 
         <div className="novel-editor-book-meta" aria-label="作品基础状态">
-          <strong>雾港来信</strong>
-          <span>短篇</span>
-          <span>第三人称</span>
-          <span>男频</span>
+          <strong>{bookDetail.title}</strong>
+          <span>{bookDetail.attributes.narrationPerspective}</span>
+          <span>{bookDetail.attributes.channel}</span>
           <span>已保存到本地</span>
-          <span>本章字数：3472</span>
-          <span>总字数：10436</span>
+          <span>当前章节：{bookDetail.progress.currentChapter}</span>
+          <span>本章计划：{bookDetail.attributes.chapterWords ? formatNumber(bookDetail.attributes.chapterWords) : "AI 自动生成"}</span>
+          <span>总字数：{formatNumber(bookDetail.progress.writtenWords)}</span>
+          {bookLoadMessage ? <span>{bookLoadMessage}</span> : null}
         </div>
       </header>
 
@@ -420,7 +575,15 @@ export function EditorPage() {
               <section className="novel-editor-nav-group" key={group.id}>
                 <div className="novel-editor-nav-head">
                   <strong>{group.title}</strong>
-                  <Plus size={14} />
+                  {group.addItemId ? (
+                    <button
+                      type="button"
+                      onClick={() => setActiveItemId(group.addItemId!)}
+                      aria-label={`新增${group.title}`}
+                    >
+                      <Plus size={14} />
+                    </button>
+                  ) : null}
                 </div>
                 <div className="novel-editor-nav-list">
                   {group.items.map((item) => {
@@ -503,6 +666,10 @@ function EditorMainPanel({ item }: { item: EditorNavItem }) {
           </div>
         ) : null}
 
+        {item.kind === "role-manager" ? <RoleManagerPanel /> : null}
+
+        {item.kind === "create-entity" ? <CreateEntityPanel item={item} /> : null}
+
         {item.fields ? (
           <dl className="novel-editor-field-grid">
             {item.fields.map((field) => (
@@ -526,7 +693,7 @@ function EditorMainPanel({ item }: { item: EditorNavItem }) {
         {item.kind === "chapter" ? (
           <textarea
             className="novel-editor-writing-area"
-            defaultValue={"第一个真正潮湿的邮戳出现在林砚的办公桌上。\n\n它没有贴在信封上，而是像一枚从旧报纸里渗出来的印记，颜色深得发黑。沈渡站在门口，没有立刻解释，只把伞尖停在门槛之外。"}
+            defaultValue={item.paragraphs?.join("\n\n") ?? ""}
           />
         ) : null}
 
@@ -547,6 +714,67 @@ function EditorMainPanel({ item }: { item: EditorNavItem }) {
         ) : null}
       </div>
     </article>
+  );
+}
+
+function RoleManagerPanel() {
+  return (
+    <div className="novel-role-manager">
+      <section>
+        <div className="novel-role-section-head">
+          <h3>主要角色</h3>
+          <button type="button">
+            <Plus size={14} />
+            添加角色
+          </button>
+        </div>
+        <div className="novel-role-card-grid">
+          <article className="novel-role-card">
+            <span>暂无主要角色</span>
+            <p>角色新增功能接入后端后，会在这里展示真实角色数据。</p>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <div className="novel-role-section-head">
+          <h3>次要角色</h3>
+          <button type="button">
+            <Plus size={14} />
+            添加角色
+          </button>
+        </div>
+        <div className="novel-role-card-grid">
+          <article className="novel-role-card">
+            <span>暂无次要角色</span>
+            <p>当前不再显示前端示例角色，避免和后端接口数据混淆。</p>
+          </article>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function CreateEntityPanel({ item }: { item: EditorNavItem }) {
+  return (
+    <form className="novel-create-entity-form" onSubmit={(event) => event.preventDefault()}>
+      <label>
+        <span>{item.createNameLabel ?? "名称"}</span>
+        <input placeholder={item.createPlaceholder ?? "请输入名称"} />
+      </label>
+      <label>
+        <span>{item.createDescriptionLabel ?? "描述"}</span>
+        <textarea placeholder="输入设定说明、可用线索、限制条件或后续需要 AI 补全的方向。" />
+      </label>
+      <div className="novel-create-entity-actions">
+        <button className="primary-button" type="button">
+          保存为模拟设定
+        </button>
+        <button className="ghost-button" type="reset">
+          清空
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -583,6 +811,10 @@ function AssistantChat() {
       </div>
     </div>
   );
+}
+
+function toMessage(error: unknown) {
+  return error instanceof Error ? error.message : "未知错误";
 }
 
 function InspirationPanel() {

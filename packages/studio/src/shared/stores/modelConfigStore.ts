@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import {
   deleteModelConfig,
+  getModelAnalysis,
   getModelUsageSettings,
   listModelConfigs,
   saveModelConfig,
@@ -9,6 +10,7 @@ import {
   testModelConnection
 } from "@/shared/api/modelConfigApi";
 import type {
+  ModelAnalysis,
   ModelConfig,
   ModelConfigDraft,
   ModelConnectionResult,
@@ -20,16 +22,15 @@ const emptyDraft: ModelConfigDraft = {
   provider: "openai-compatible",
   baseUrl: "",
   apiKey: "",
-  model: "",
+  apiModel: "",
   purpose: "writing",
-  temperature: 0.7,
-  maxTokens: 4096,
   enabled: true,
   isDefault: false,
   note: ""
 };
 
 interface ModelConfigState {
+  analysis: ModelAnalysis | null;
   configs: ModelConfig[];
   draft: ModelConfigDraft;
   usage: ModelUsageSettings;
@@ -46,22 +47,34 @@ interface ModelConfigState {
   saveDraft: () => Promise<void>;
   removeConfig: (id: string) => Promise<void>;
   markDefault: (id: string) => Promise<void>;
-  assignPurposeModel: (purpose: "writing" | "review", modelId: string) => Promise<void>;
+  assignPurposeModel: (purpose: "planning" | "writing" | "review", modelId: string) => Promise<void>;
   testDraft: () => Promise<void>;
+}
+
+async function loadModelSnapshot() {
+  const [configs, usage, analysis] = await Promise.all([
+    listModelConfigs(),
+    getModelUsageSettings(),
+    getModelAnalysis()
+  ]);
+
+  return { analysis, configs, usage };
 }
 
 /**
  * 模型配置状态层。
  *
- * 页面只关心 store 暴露的动作，不直接碰 localStorage / fetch。
- * 这样未来从 mock API 切到真实后端时，页面基本不用改。
+ * 页面只关心 store 暴露的动作，不直接碰 fetch。
+ * API 层负责和本地 Hono 后端通信，页面保持稳定。
  */
 export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
+  analysis: null,
   configs: [],
   draft: emptyDraft,
   usage: {
     writingModelId: null,
-    reviewModelId: null
+    reviewModelId: null,
+    planningModelId: null
   },
   selectedId: null,
   loading: false,
@@ -73,8 +86,9 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
   async loadConfigs() {
     set({ loading: true, error: null });
     try {
-      const [configs, usage] = await Promise.all([listModelConfigs(), getModelUsageSettings()]);
+      const { analysis, configs, usage } = await loadModelSnapshot();
       set({
+        analysis,
         configs,
         usage,
         loading: false,
@@ -118,9 +132,9 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
     set({ saving: true, error: null });
     try {
       const saved = await saveModelConfig(get().draft);
-      const configs = await listModelConfigs();
-      const usage = await getModelUsageSettings();
+      const { analysis, configs, usage } = await loadModelSnapshot();
       set({
+        analysis,
         configs,
         usage,
         selectedId: saved.id,
@@ -136,9 +150,9 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
     set({ saving: true, error: null });
     try {
       await deleteModelConfig(id);
-      const configs = await listModelConfigs();
-      const usage = await getModelUsageSettings();
+      const { analysis, configs, usage } = await loadModelSnapshot();
       set({
+        analysis,
         configs,
         usage,
         selectedId: configs[0]?.id ?? null,
@@ -155,7 +169,9 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
     set({ saving: true, error: null });
     try {
       const configs = await setDefaultModelConfig(id);
+      const analysis = await getModelAnalysis();
       set({
+        analysis,
         configs,
         draft: configs.find((config) => config.id === get().selectedId) ?? get().draft,
         saving: false
@@ -169,7 +185,8 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
     set({ saving: true, error: null });
     try {
       const usage = await setPurposeModel(purpose, modelId);
-      set({ usage, saving: false });
+      const analysis = await getModelAnalysis();
+      set({ analysis, usage, saving: false });
     } catch (error) {
       set({ saving: false, error: toMessage(error) });
     }

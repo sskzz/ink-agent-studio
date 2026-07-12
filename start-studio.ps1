@@ -1,26 +1,80 @@
+param(
+    [switch]$CheckOnly
+)
+
 $ErrorActionPreference = "Stop"
 
-# 项目根目录：脚本放在根目录时，自动以脚本所在位置作为项目根。
+# Keep this script ASCII-only for Windows PowerShell compatibility.
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $studioDir = Join-Path $projectRoot "packages\studio"
+$backendDir = Join-Path $projectRoot "backend"
+$backendUrl = "http://127.0.0.1:8787/api/v1/health"
+$backendLog = Join-Path $backendDir "backend-dev.log"
+$backendStartScript = Join-Path $backendDir "start-backend.ps1"
+$workspaceNodeModules = Join-Path $projectRoot "node_modules"
 
 if (-not (Test-Path -LiteralPath $studioDir)) {
-    throw "未找到前端项目目录：$studioDir"
+    throw "Studio directory not found: $studioDir"
 }
 
-Set-Location $studioDir
+if (-not (Test-Path -LiteralPath $backendDir)) {
+    throw "Backend directory not found: $backendDir"
+}
 
-# 第一版前端使用 pnpm。若依赖目录不存在，先自动安装一次，降低首次启动门槛。
-if (-not (Test-Path -LiteralPath (Join-Path $studioDir "node_modules"))) {
-    Write-Host "未检测到 node_modules，开始安装前端依赖..." -ForegroundColor Yellow
+if (-not (Test-Path -LiteralPath $backendStartScript)) {
+    throw "Backend start script not found: $backendStartScript"
+}
+
+if ($CheckOnly) {
+    Write-Host "Start script syntax ok." -ForegroundColor Green
+    exit 0
+}
+
+function Test-BackendAlive {
+    try {
+        $response = Invoke-RestMethod -Uri $backendUrl -TimeoutSec 2
+        return $null -ne $response -and $response.code -eq 0
+    }
+    catch {
+        return $false
+    }
+}
+
+$hasWorkspaceDependencies = Test-Path -LiteralPath $workspaceNodeModules
+if (-not $hasWorkspaceDependencies) {
+    Write-Host "Workspace node_modules not found. Installing dependencies..." -ForegroundColor Yellow
+    Set-Location $projectRoot
     pnpm install
 }
 
+$backendAlive = Test-BackendAlive
+if ($backendAlive) {
+    Write-Host "Backend is already running." -ForegroundColor Green
+}
+else {
+    Write-Host "Starting Ink Agent Studio backend in background..." -ForegroundColor Yellow
+    Write-Host "  Backend log: $backendLog" -ForegroundColor DarkGray
+
+    Start-Process `
+        -FilePath "powershell" `
+        -ArgumentList @(
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            $backendStartScript
+        ) `
+        -WindowStyle Hidden
+
+    Start-Sleep -Seconds 2
+}
+
 Write-Host ""
-Write-Host "Ink Agent Studio 前端即将启动：" -ForegroundColor Green
+Write-Host "Ink Agent Studio is starting:" -ForegroundColor Green
 Write-Host "  http://127.0.0.1:5173/" -ForegroundColor Cyan
 Write-Host "  http://127.0.0.1:5173/models" -ForegroundColor Cyan
+Write-Host "  Backend health: $backendUrl" -ForegroundColor Cyan
 Write-Host ""
 
-# 保持前台运行，方便用户直接看到 Vite 日志和错误信息。
+Set-Location $studioDir
 pnpm run dev

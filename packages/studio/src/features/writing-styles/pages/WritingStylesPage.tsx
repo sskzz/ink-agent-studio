@@ -1,45 +1,82 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ChangeEvent } from "react";
 import { Badge } from "@/shared/components/ui/Badge";
 import { PageHeader } from "@/shared/components/ui/PageHeader";
-import { seedStyles, simulatedAnalysis } from "@/features/writing-styles/data/writingStyles";
+import { simulatedAnalysis } from "@/features/writing-styles/data/writingStyles";
 import type { AnalysisResult, StyleParameter, WritingStyle } from "@/features/writing-styles/data/writingStyles";
+import {
+  analyzeWritingStyle,
+  createWritingStyle,
+  listWritingStyles
+} from "@/features/writing-styles/api/writingStylesApi";
 
 type StyleView = "list" | "create" | "detail";
 
 /**
  * 写作风格页。
  *
- * 当前版本只生成前端页面和本地交互状态：
- * - 风格列表：展示已经沉淀的风格模板。
- * - 新增风格：通过本地文件选择和网络搜索入口收集模板作品来源。
- * - AI 分析结果：点击“AI分析”后展示示例分析结果，后续替换为真实 Agent 返回值。
- * - 风格详情：查看单个风格的分析摘要、来源文件和提示词片段。
- *
- * 后续接入后端时，建议把“AI分析”和“保存风格”替换为本地 API：
- * POST /api/v1/writing-styles/analyze 负责分析文件/搜索结果并返回 AnalysisResult；
- * POST /api/v1/writing-styles 负责保存风格配置。
+ * 当前版本已接入后端本地风格库：
+ * - 风格列表读取 /api/v1/writing-styles，后端为空时展示空状态。
+ * - 新增风格支持读取首个模板文件内容并请求 /api/v1/writing-styles/analyze 生成分析预览。
+ * - 用户确认后点击“保存风格”才会调用 /api/v1/writing-styles 持久化。
+ * - 风格详情展示分析摘要、来源文件和提示词片段。
  */
 export function WritingStylesPage() {
   const [view, setView] = useState<StyleView>("list");
-  const [styles, setStyles] = useState<WritingStyle[]>(seedStyles);
-  const [selectedId, setSelectedId] = useState(seedStyles[0]?.id ?? "");
+  const [styles, setStyles] = useState<WritingStyle[]>([]);
+  const [selectedId, setSelectedId] = useState("");
   const [styleName, setStyleName] = useState("");
   const [styleNote, setStyleNote] = useState("");
   const [searchKeywords, setSearchKeywords] = useState("");
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [sampleContent, setSampleContent] = useState("");
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [feedback, setFeedback] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const selectedStyle = styles.find((style) => style.id === selectedId) ?? styles[0];
   const fileCount = styles.reduce((total, style) => total + style.sourceFiles.length, 0);
   const analyzedCount = styles.filter((style) => style.analysis.parameters.length > 0).length;
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadStyles() {
+      setLoading(true);
+
+      try {
+        const nextStyles = await listWritingStyles();
+
+        if (!ignore) {
+          setStyles(nextStyles);
+          setSelectedId(nextStyles[0]?.id ?? "");
+          setFeedback("");
+        }
+      } catch (error) {
+        if (!ignore) {
+          setFeedback(`写作风格后端读取失败：${toMessage(error)}`);
+        }
+      } finally {
+        if (!ignore) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadStyles();
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
 
   function openCreateView() {
     setStyleName("");
     setStyleNote("");
     setSearchKeywords("");
     setSelectedFiles([]);
+    setSampleContent("");
     setAnalysisResult(null);
     setFeedback("");
     setView("create");
@@ -52,19 +89,53 @@ export function WritingStylesPage() {
   }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const names = Array.from(event.target.files ?? []).map((file) => file.name);
+    const files = Array.from(event.target.files ?? []);
+    const names = files.map((file) => file.name);
     setSelectedFiles(names);
+    setSampleContent("");
     setAnalysisResult(null);
     setFeedback(names.length > 0 ? `已收集 ${names.length} 个本地模板作品，等待 AI 分析。` : "");
+
+    // 第一版只读取首个模板文件内容，先满足后端分析接口需要的文本输入。
+    if (files[0]) {
+      void files[0]
+        .text()
+        .then((content) => {
+          setSampleContent(content);
+        })
+        .catch(() => {
+          setFeedback("模板文件读取失败，可改用网络搜索关键词或风格备注后再分析。");
+        });
+    }
   }
 
-  function analyzeStyle() {
-    // 第一版只模拟“AI 分析模板作品/搜索线索”的结果；真实版本在这里调用 analyze API。
-    setAnalysisResult(simulatedAnalysis);
-    setFeedback("AI 分析已完成，右侧已生成结果展示，可继续保存为风格。");
+  async function analyzeStyle() {
+    const content = sampleContent || searchKeywords || styleNote || styleName;
+
+    if (!content.trim()) {
+      setFeedback("请先选择模板文件，或填写网络搜索关键词/风格备注后再执行 AI 分析。");
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const style = await analyzeWritingStyle({
+        name: styleName.trim() || "AI 分析风格",
+        sampleFileName: selectedFiles[0] ?? "search-keywords.md",
+        content
+      });
+      setAnalysisResult(style.analysis);
+      setFeedback("AI 分析已完成。请确认结果后点击“保存风格”，届时才会写入后端风格库。");
+    } catch (error) {
+      setAnalysisResult(simulatedAnalysis);
+      setFeedback(`AI 分析接口调用失败，已展示前端模拟结果：${toMessage(error)}`);
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function saveStyle() {
+  async function saveStyle() {
     const trimmedName = styleName.trim();
     const result = analysisResult ?? {
       ...simulatedAnalysis,
@@ -72,30 +143,28 @@ export function WritingStylesPage() {
       parameters: []
     };
 
-    const newStyle: WritingStyle = {
-      id: `style-${Date.now()}`,
-      name: trimmedName || "未命名写作风格",
-      summary:
-        styleNote.trim() ||
-        result.summary ||
-        "由模板作品分析生成的写作风格，后续可作为写作 Agent 的风格约束和审稿规则来源。",
-      sourceFiles: selectedFiles.length > 0 ? selectedFiles : ["待补充模板作品"],
-      searchKeywords: searchKeywords.trim() || "未填写网络搜索线索",
-      tags: analysisResult ? ["AI 分析", "自定义", "待校准"] : ["草稿", "待分析"],
-      lastAnalyzed: analysisResult ? "刚刚" : "未分析",
-      metrics: {
-        tone: analysisResult ? "克制、清晰" : "待分析",
-        rhythm: analysisResult ? "短中句交替" : "待分析",
-        pointOfView: analysisResult ? "第三人称限知" : "待分析",
-        aiReduction: analysisResult ? "减少解释腔" : "待分析"
-      },
-      analysis: result
-    };
+    setSaving(true);
 
-    setStyles((currentStyles) => [newStyle, ...currentStyles]);
-    setSelectedId(newStyle.id);
-    setFeedback("风格已保存到前端列表。");
-    setView("detail");
+    try {
+      const savedStyle = await createWritingStyle({
+        name: trimmedName || "未命名写作风格",
+        summary:
+          styleNote.trim() ||
+          result.summary ||
+          "由模板作品分析生成的写作风格，可作为写作 Agent 的风格约束和审稿规则来源。",
+        parameters: Object.fromEntries(result.parameters.map((parameter) => [parameter.label, parameter.value])),
+        sampleFileName: selectedFiles[0] ?? null
+      });
+      const nextStyles = await listWritingStyles();
+      setStyles(nextStyles);
+      setSelectedId(savedStyle.id);
+      setFeedback("风格已保存到后端本地风格库。");
+      setView("detail");
+    } catch (error) {
+      setFeedback(`风格保存失败：${toMessage(error)}`);
+    } finally {
+      setSaving(false);
+    }
   }
 
   function copyPromptSnippet(snippet: string) {
@@ -138,6 +207,8 @@ export function WritingStylesPage() {
         </article>
       </section>
 
+      {loading ? <div className="test-banner">正在读取后端写作风格库...</div> : null}
+      {saving ? <div className="test-banner">正在同步后端风格数据...</div> : null}
       {feedback ? <div className="test-banner success">{feedback}</div> : null}
 
       {/* key 跟随子页面变化，保证列表、新增、详情之间切换时有明确的进入动画。 */}
@@ -183,11 +254,14 @@ function StyleListView({ styles, selectedId, onOpenDetail }: StyleListViewProps)
         <div>
           <p className="eyebrow">Style Library</p>
           <h3>风格列表</h3>
-          <p className="muted">点击任意风格查看详情。第一版数据只保存在前端状态里，刷新后会回到示例数据。</p>
+          <p className="muted">点击任意风格查看详情。这里完全使用后端本地风格库数据。</p>
         </div>
       </div>
 
       <div className="style-grid">
+        {styles.length === 0 ? (
+          <div className="empty-list">后端风格库暂无数据。点击右上角“新增风格”创建第一条写作风格。</div>
+        ) : null}
         {styles.map((style) => (
           <button
             className={`style-card${style.id === selectedId ? " active" : ""}`}
@@ -267,7 +341,11 @@ function StyleCreateView({
   onStyleNameChange,
   onStyleNoteChange
 }: StyleCreateViewProps) {
-  const canAnalyze = selectedFiles.length > 0 || searchKeywords.trim().length > 0;
+  const canAnalyze =
+    selectedFiles.length > 0 ||
+    searchKeywords.trim().length > 0 ||
+    styleName.trim().length > 0 ||
+    styleNote.trim().length > 0;
 
   return (
     <section className="style-create-layout">
@@ -312,7 +390,7 @@ function StyleCreateView({
                 />
                 <span className="source-upload-icon">DOC</span>
                 <strong>选择本地模板作品</strong>
-                <p>点击导入 txt、md、doc、docx、pdf。第一版只展示文件名，不读取文件内容。</p>
+                <p>点击导入 txt、md、doc、docx、pdf。当前会读取首个文本类文件内容用于后端分析预览。</p>
               </label>
 
               <label className="source-search-card">
@@ -365,7 +443,7 @@ function AnalysisResultPanel({ result }: AnalysisResultPanelProps) {
         <div>
           <p className="eyebrow">AI Result</p>
           <h3>AI 分析结果</h3>
-          <p className="muted">点击“AI分析”后，这里展示模拟生成的风格摘要、结构规则和去 AI 味建议。</p>
+          <p className="muted">点击“AI分析”后，这里展示后端分析预览；点击“保存风格”后才写入本地风格库。</p>
         </div>
         <Badge tone={result ? "sage" : "amber"}>{result ? "已分析" : "等待分析"}</Badge>
       </div>
@@ -538,4 +616,8 @@ function InsightMeter({ parameter }: InsightMeterProps) {
       </div>
     </article>
   );
+}
+
+function toMessage(error: unknown) {
+  return error instanceof Error ? error.message : "未知错误";
 }

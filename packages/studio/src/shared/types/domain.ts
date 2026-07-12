@@ -7,11 +7,29 @@ export type BookStatus = "drafting" | "planning" | "reviewing" | "paused";
  * 后续如果要支持更多厂商，只需要扩展这个联合类型和模型配置页的选项。
  */
 export type ModelProvider =
+  | "openai"
+  | "azure-openai"
   | "openai-compatible"
+  | "anthropic"
   | "ollama"
+  | "lmstudio"
+  | "vllm"
   | "deepseek"
   | "gemini"
+  | "qwen"
   | "moonshot"
+  | "zhipu"
+  | "doubao"
+  | "baichuan"
+  | "baidu-qianfan"
+  | "tencent-hunyuan"
+  | "minimax"
+  | "mistral"
+  | "xai"
+  | "cohere"
+  | "openrouter"
+  | "oneapi"
+  | "litellm"
   | "custom";
 
 /**
@@ -49,8 +67,8 @@ export interface ModelProfile {
 /**
  * 前端模型配置实体。
  *
- * 第一版只在浏览器 localStorage 中模拟保存；后续接入 Hono API 后，
- * 这个类型可以直接作为前后端契约的基础。
+ * 当前通过 Hono 后端保存到本地 workspace；apiKey 字段只用于表单提交，
+ * 后端列表和详情接口不会回显真实密钥。
  */
 export interface ModelConfig {
   id: string;
@@ -58,10 +76,8 @@ export interface ModelConfig {
   provider: ModelProvider;
   baseUrl: string;
   apiKey: string;
-  model: string;
+  apiModel: string;
   purpose: ModelPurpose;
-  temperature: number;
-  maxTokens: number;
   enabled: boolean;
   isDefault: boolean;
   note: string;
@@ -92,4 +108,43 @@ export interface ModelConnectionResult {
 export interface ModelUsageSettings {
   writingModelId: string | null;
   reviewModelId: string | null;
+  planningModelId: string | null;
+}
+
+export interface ModelAnalysisIssue {
+  id: string;
+  severity: "info" | "warning" | "critical";
+  title: string;
+  description: string;
+  targetId: string | null;
+  targetType: "config" | "route" | "system";
+}
+
+export interface ModelRouteAnalysis {
+  routeKey: "writingModelId" | "reviewModelId" | "planningModelId";
+  label: string;
+  modelConfigId: string | null;
+  modelName: string;
+  provider: string;
+  ready: boolean;
+  issues: string[];
+}
+
+export interface ModelAnalysis {
+  generatedAt: string;
+  score: number;
+  status: "ready" | "partial" | "blocked";
+  summary: {
+    totalConfigs: number;
+    enabledConfigs: number;
+    disabledConfigs: number;
+    defaultModelName: string | null;
+    supportedAdapterConfigs: number;
+    routeReadyCount: number;
+  };
+  providerStats: Array<{ key: ModelProvider; enabled: number; total: number }>;
+  purposeStats: Array<{ key: ModelPurpose; enabled: number; total: number }>;
+  routes: ModelRouteAnalysis[];
+  issues: ModelAnalysisIssue[];
+  suggestions: string[];
 }

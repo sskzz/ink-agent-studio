@@ -10,7 +10,7 @@ interface WorkspaceState {
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
-  activeBookId: "demo-book",
+  activeBookId: null,
   sidebarCollapsed: false,
   rightPanelOpen: true,
   setActiveBookId: (bookId) => set({ activeBookId: bookId }),

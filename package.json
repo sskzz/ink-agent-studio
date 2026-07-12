@@ -1,0 +1,13 @@
+{
+  "name": "ink-agent-studio-root",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:backend": "pnpm --dir backend dev",
+    "dev:studio": "pnpm --dir packages/studio dev",
+    "build:backend": "pnpm --dir backend build",
+    "build:studio": "pnpm --dir packages/studio build",
+    "typecheck:backend": "pnpm --dir backend typecheck",
+    "typecheck:studio": "pnpm --dir packages/studio typecheck"
+  }
+}

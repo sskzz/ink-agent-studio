@@ -1,12 +1,30 @@
 import type { ModelProvider, ModelPurpose } from "@/shared/types/domain";
 
 export const providerOptions: Array<{ label: string; value: ModelProvider; hint: string }> = [
-  { label: "OpenAI Compatible", value: "openai-compatible", hint: "适合 DeepSeek、OneAPI、中转服务" },
-  { label: "Ollama", value: "ollama", hint: "本地模型服务" },
-  { label: "DeepSeek", value: "deepseek", hint: "DeepSeek 官方服务" },
-  { label: "Gemini", value: "gemini", hint: "Google Gemini" },
-  { label: "Moonshot", value: "moonshot", hint: "月之暗面/Kimi" },
-  { label: "Custom", value: "custom", hint: "自定义服务商" }
+  { label: "OpenAI", value: "openai", hint: "OpenAI 官方 API，适合高质量规划、写作和审稿" },
+  { label: "Azure OpenAI", value: "azure-openai", hint: "企业 Azure 部署，需配置资源域名和部署名" },
+  { label: "OpenAI Compatible", value: "openai-compatible", hint: "OpenAI 兼容协议，适合三方中转站和自建网关" },
+  { label: "Anthropic Claude", value: "anthropic", hint: "Anthropic 官方 API，适合长上下文审稿和规划" },
+  { label: "Google Gemini", value: "gemini", hint: "Google Gemini API，适合多模态和长上下文任务" },
+  { label: "DeepSeek", value: "deepseek", hint: "DeepSeek 官方服务，常用于高性价比写作/推理" },
+  { label: "Qwen / DashScope", value: "qwen", hint: "通义千问 / 阿里云百炼 DashScope" },
+  { label: "Moonshot / Kimi", value: "moonshot", hint: "月之暗面 Kimi，适合长上下文阅读和分析" },
+  { label: "智谱 GLM", value: "zhipu", hint: "智谱 AI GLM 系列模型" },
+  { label: "豆包 / 火山方舟", value: "doubao", hint: "字节火山方舟模型服务" },
+  { label: "百川智能", value: "baichuan", hint: "百川大模型 API" },
+  { label: "百度千帆", value: "baidu-qianfan", hint: "百度智能云千帆大模型平台" },
+  { label: "腾讯混元", value: "tencent-hunyuan", hint: "腾讯混元模型服务" },
+  { label: "MiniMax", value: "minimax", hint: "MiniMax 官方模型 API" },
+  { label: "Mistral AI", value: "mistral", hint: "Mistral 官方 API，适合多语言和开放模型生态" },
+  { label: "xAI", value: "xai", hint: "xAI Grok 系列模型 API" },
+  { label: "Cohere", value: "cohere", hint: "Cohere 文本生成、重排和向量能力" },
+  { label: "OpenRouter", value: "openrouter", hint: "三方模型聚合平台，通常使用 OpenAI 兼容协议" },
+  { label: "One API", value: "oneapi", hint: "自建或三方中转网关，统一 OpenAI 兼容调用" },
+  { label: "LiteLLM", value: "litellm", hint: "自建模型网关，可统一多厂商协议" },
+  { label: "Ollama", value: "ollama", hint: "本地模型服务，默认 http://127.0.0.1:11434/v1" },
+  { label: "LM Studio", value: "lmstudio", hint: "本地桌面模型服务，支持 OpenAI 兼容接口" },
+  { label: "vLLM", value: "vllm", hint: "本地/服务器自部署推理服务，适合高并发" },
+  { label: "Custom", value: "custom", hint: "自定义服务商或尚未内置的协议" }
 ];
 
 export const purposeOptions: Array<{ label: string; value: ModelPurpose }> = [

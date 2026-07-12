@@ -1,5 +1,5 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-powershell -ExecutionPolicy Bypass -File "%~dp0start-studio.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-studio.ps1" %*
 endlocal

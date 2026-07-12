@@ -709,6 +709,10 @@ select {
 .ghost-button,
 .danger-button {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   min-height: 42px;
   border: 1px solid var(--line);
   border-radius: 15px;
@@ -1483,6 +1487,17 @@ select {
   grid-column: 1 / -1;
 }
 
+.model-discovery-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.model-discovery-row .ghost-button {
+  white-space: nowrap;
+}
+
 .field span {
   color: var(--muted-strong);
   font-size: 14px;
@@ -2164,7 +2179,7 @@ body::after {
   color: #be123c;
 }
 
-/* 写作风格页：只做前端页面和 mock 交互，视觉上沿用浅色玻璃砂材质。 */
+/* 写作风格页：已接入后端本地风格库，视觉上沿用浅色玻璃砂材质。 */
 .style-page {
   gap: 22px;
 }
@@ -2799,6 +2814,10 @@ body::after {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.82),
     0 18px 42px rgba(14, 116, 144, 0.13);
+}
+
+.select-field.disabled .select-trigger {
+  box-shadow: none;
 }
 
 .select-trigger:focus-visible {
@@ -4621,6 +4640,7 @@ body::before {
 }
 
 .editor-shell .page-surface {
+  height: 100vh;
   min-height: 100vh;
   overflow: hidden;
   border: 0;
@@ -4634,12 +4654,16 @@ body::before {
 }
 
 .editor-shell .route-transition {
+  height: 100vh;
   min-height: 100vh;
+  overflow: hidden;
   animation: none;
 }
 
 .novel-editor-page {
+  height: 100vh;
   min-height: 100vh;
+  overflow: hidden;
   padding: 0;
   background: #eef3f8;
   color: #1f2937;
@@ -4750,6 +4774,7 @@ body::before {
 .novel-editor-left {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  height: calc(100vh - 52px);
   min-width: 0;
   overflow: hidden;
   border-right: 1px solid #e6ebf1;
@@ -4805,6 +4830,27 @@ body::before {
   font-weight: 780;
 }
 
+.novel-editor-nav-head > button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #8a96a8;
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.novel-editor-nav-head > button:hover {
+  background: #eefcf6;
+  color: #0f766e;
+  transform: scale(1.05);
+}
+
 .novel-editor-nav-head svg {
   color: #8a96a8;
 }
@@ -4856,6 +4902,7 @@ body::before {
 }
 
 .novel-editor-center {
+  height: calc(100vh - 52px);
   min-width: 0;
   overflow: hidden;
   padding: 14px 46px 24px;
@@ -4968,6 +5015,133 @@ body::before {
   font-size: 11px;
 }
 
+.novel-role-manager {
+  display: grid;
+  gap: 32px;
+}
+
+.novel-role-manager h3 {
+  margin: 0;
+  color: #172033;
+  font-size: 17px;
+  font-weight: 760;
+}
+
+.novel-role-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.novel-role-section-head button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #172033;
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.novel-role-section-head button:hover {
+  background: #eefcf6;
+  color: #0f766e;
+}
+
+.novel-role-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.novel-role-card {
+  display: grid;
+  gap: 8px;
+  min-height: 68px;
+  padding: 12px 14px;
+  border: 1px solid #e6ebf1;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 8px 18px rgb(30 41 59 / 0.04);
+}
+
+.novel-role-card span {
+  color: #172033;
+  font-weight: 760;
+}
+
+.novel-role-card small {
+  margin-left: 4px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.novel-role-card p {
+  margin: 0;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.novel-create-entity-form {
+  display: grid;
+  gap: 18px;
+  max-width: 720px;
+}
+
+.novel-create-entity-form label {
+  display: grid;
+  gap: 8px;
+}
+
+.novel-create-entity-form label span {
+  color: #172033;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.novel-create-entity-form input,
+.novel-create-entity-form textarea {
+  width: 100%;
+  border: 1px solid #e6ebf1;
+  border-radius: 12px;
+  background: #fbfdff;
+  color: #172033;
+  outline: none;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.novel-create-entity-form input {
+  min-height: 42px;
+  padding: 0 13px;
+}
+
+.novel-create-entity-form textarea {
+  min-height: 180px;
+  padding: 13px;
+  line-height: 1.75;
+  resize: vertical;
+}
+
+.novel-create-entity-form input:focus,
+.novel-create-entity-form textarea:focus {
+  border-color: rgb(16 168 117 / 0.45);
+  box-shadow: 0 0 0 4px rgb(16 168 117 / 0.08);
+}
+
+.novel-create-entity-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .novel-editor-chip-list {
   display: flex;
   flex-wrap: wrap;
@@ -5049,6 +5223,7 @@ body::before {
 .novel-assistant-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  height: calc(100vh - 52px);
   min-width: 0;
   overflow: hidden;
   border-left: 1px solid #e6ebf1;
@@ -5353,6 +5528,10 @@ body::before {
     grid-template-columns: 1fr;
   }
 
+  .novel-role-card-grid {
+    grid-template-columns: 1fr;
+  }
+
   .novel-assistant-toggle {
     width: fit-content;
     min-height: 34px;
@@ -5364,5 +5543,285 @@ body::before {
     margin: 0 12px 12px;
     border: 1px solid #e6ebf1;
     border-radius: 14px;
+  }
+}
+
+.page:not(.novel-editor-page) > .page-header {
+  position: relative;
+  overflow: hidden;
+  padding: 24px;
+  border: 1px solid rgba(14, 165, 233, 0.16);
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(186, 230, 253, 0.66), transparent 24rem),
+    radial-gradient(circle at 92% 12%, rgba(209, 250, 229, 0.58), transparent 26rem),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.48));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.86),
+    0 24px 70px rgba(81, 101, 128, 0.12);
+}
+
+.page:not(.novel-editor-page) > .page-header::after {
+  position: absolute;
+  top: -70px;
+  right: 10%;
+  width: 180px;
+  height: 180px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.22), rgba(16, 185, 129, 0.16));
+  content: "";
+  filter: blur(4px);
+  opacity: 0.72;
+}
+
+.page:not(.novel-editor-page) > .page-header > * {
+  position: relative;
+  z-index: 1;
+}
+
+.dashboard-strip article,
+.model-type-card,
+.model-summary-card,
+.purpose-card,
+.style-card,
+.book-card,
+.book-section-card,
+.book-form-panel,
+.book-preview-panel,
+.model-form-panel {
+  border-color: rgba(14, 165, 233, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.48)),
+    rgba(255, 255, 255, 0.38);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    0 18px 52px rgba(81, 101, 128, 0.1);
+  transition:
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background 180ms ease;
+}
+
+.model-type-card:hover,
+.model-summary-card:hover,
+.purpose-card:hover,
+.style-card:hover,
+.book-card-button:hover {
+  border-color: rgba(14, 165, 233, 0.26);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(240, 253, 250, 0.62)),
+    rgba(255, 255, 255, 0.54);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 24px 72px rgba(14, 165, 233, 0.14);
+  transform: translateY(-2px);
+}
+
+.model-analysis-panel {
+  display: grid;
+  gap: 18px;
+  margin: 18px 0 22px;
+  padding: 22px;
+  border: 1px solid rgba(14, 165, 233, 0.16);
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(224, 242, 254, 0.76), transparent 23rem),
+    radial-gradient(circle at 100% 12%, rgba(204, 251, 241, 0.72), transparent 25rem),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.82), rgba(248, 250, 252, 0.58));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.86),
+    0 28px 82px rgba(81, 101, 128, 0.13);
+}
+
+.model-analysis-panel.status-ready {
+  border-color: rgba(15, 159, 120, 0.24);
+}
+
+.model-analysis-panel.status-partial {
+  border-color: rgba(217, 119, 6, 0.22);
+}
+
+.model-analysis-panel.status-blocked {
+  border-color: rgba(225, 29, 72, 0.2);
+}
+
+.model-analysis-hero,
+.model-analysis-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: start;
+}
+
+.model-analysis-hero h3,
+.model-analysis-columns h4 {
+  margin: 0;
+  color: #142133;
+  font-family: var(--font-display);
+  letter-spacing: -0.045em;
+}
+
+.model-analysis-hero h3 {
+  font-size: clamp(17px, 1.6vw, 23px);
+}
+
+.model-analysis-hero p,
+.model-analysis-columns p,
+.model-route-health-grid p {
+  margin: 7px 0 0;
+  color: #52667a;
+  line-height: 1.75;
+}
+
+.model-analysis-score {
+  display: grid;
+  justify-items: center;
+  min-width: 122px;
+  padding: 16px;
+  border: 1px solid rgba(14, 165, 233, 0.14);
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(240, 253, 250, 0.58)),
+    rgba(255, 255, 255, 0.48);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.88),
+    0 18px 42px rgba(14, 165, 233, 0.1);
+}
+
+.model-analysis-score strong {
+  color: #0f766e;
+  font-family: var(--font-display);
+  font-size: 32px;
+  line-height: 1;
+  letter-spacing: -0.06em;
+}
+
+.model-analysis-score span {
+  margin: 3px 0 10px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.model-analysis-metrics,
+.model-route-health-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.model-analysis-metrics article,
+.model-route-health-grid article,
+.analysis-issue-item,
+.analysis-suggestion-item {
+  border: 1px solid rgba(14, 165, 233, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.54);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.model-analysis-metrics article {
+  padding: 14px;
+}
+
+.model-analysis-metrics span,
+.model-route-health-grid small {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.model-analysis-metrics strong {
+  display: block;
+  margin-top: 6px;
+  color: #142133;
+  font-size: 22px;
+}
+
+.model-route-health-grid article {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.model-route-health-grid article.ready {
+  border-color: rgba(15, 159, 120, 0.18);
+  background: rgba(240, 253, 250, 0.66);
+}
+
+.model-route-health-grid article.blocked {
+  border-color: rgba(217, 119, 6, 0.16);
+  background: rgba(255, 251, 235, 0.62);
+}
+
+.model-route-health-grid strong {
+  color: #182230;
+}
+
+.model-analysis-columns {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.model-analysis-columns > div {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.analysis-issue-item,
+.analysis-suggestion-item {
+  padding: 12px;
+}
+
+.analysis-issue-item p,
+.analysis-suggestion-item p {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.analysis-suggestion-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.analysis-suggestion-item span {
+  width: 8px;
+  height: 8px;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #0891b2, #10b981);
+  box-shadow: 0 0 0 5px rgba(14, 165, 233, 0.1);
+}
+
+@media (max-width: 980px) {
+  .model-analysis-hero,
+  .model-analysis-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-analysis-score {
+    justify-items: start;
+    width: 100%;
+  }
+
+  .model-analysis-metrics,
+  .model-route-health-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .page:not(.novel-editor-page) > .page-header,
+  .model-analysis-panel {
+    border-radius: 20px;
+    padding: 16px;
+  }
+
+  .model-analysis-metrics,
+  .model-route-health-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

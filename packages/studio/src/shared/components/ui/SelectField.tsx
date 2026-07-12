@@ -11,6 +11,7 @@ interface SelectFieldProps {
   value: string;
   options: SelectOption[];
   placeholder?: string;
+  disabled?: boolean;
   onChange: (value: string) => void;
 }
 
@@ -20,11 +21,17 @@ interface SelectFieldProps {
  * 使用自定义面板是为了避免不同系统原生 select 样式差异过大，
  * 也让右侧下拉按钮区域更大、更容易点击。
  */
-export function SelectField({ value, options, placeholder = "请选择", onChange }: SelectFieldProps) {
+export function SelectField({ value, options, placeholder = "请选择", disabled = false, onChange }: SelectFieldProps) {
   const [open, setOpen] = useState(false);
   const fieldId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const selectedOption = options.find((option) => option.value === value);
+
+  useEffect(() => {
+    if (disabled) {
+      setOpen(false);
+    }
+  }, [disabled]);
 
   useEffect(() => {
     if (!open) {
@@ -62,11 +69,12 @@ export function SelectField({ value, options, placeholder = "请选择", onChang
   }
 
   return (
-    <div className={`select-field${open ? " open" : ""}`} ref={rootRef}>
+    <div className={`select-field${open ? " open" : ""}${disabled ? " disabled" : ""}`} ref={rootRef}>
       <button
         aria-controls={fieldId}
         aria-expanded={open}
         className="select-trigger"
+        disabled={disabled}
         type="button"
         onClick={() => setOpen((currentOpen) => !currentOpen)}
       >

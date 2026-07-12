@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
+import { ArrowLeft, RefreshCw } from "lucide-react";
+import { discoverAvailableModels } from "@/shared/api/modelConfigApi";
 import { providerOptions, purposeLabel, purposeOptions } from "@/config/modelOptions";
 import { Badge } from "@/shared/components/ui/Badge";
 import { PageHeader } from "@/shared/components/ui/PageHeader";
 import { SelectField } from "@/shared/components/ui/SelectField";
 import { useModelConfigStore } from "@/shared/stores/modelConfigStore";
-import type { ModelConfig, ModelProvider, ModelPurpose } from "@/shared/types/domain";
+import type { ModelAnalysis, ModelConfig, ModelProvider, ModelPurpose } from "@/shared/types/domain";
 
-type ModelView = "types" | "list" | "detail" | "writing" | "review";
+type ModelView = "types" | "list" | "detail" | "planning" | "writing" | "review";
 
 /**
  * 模型配置页。
@@ -16,12 +18,13 @@ type ModelView = "types" | "list" | "detail" | "writing" | "review";
  * - 写作模型：从模型列表中选择 Agent 写正文时使用的模型。
  * - 审稿模型：从模型列表中选择审稿/修订时使用的模型。
  *
- * 第一版仍然只做前端页面和 mock 交互；真实后端接入点在 src/api/modelConfigApi.ts。
+ * 当前已通过 modelConfigApi.ts 接入本地 Hono 后端，页面和 store 不直接关心 fetch 细节。
  */
 export function ModelsPage() {
   const [view, setView] = useState<ModelView>("types");
 
   const {
+    analysis,
     configs,
     draft,
     usage,
@@ -37,7 +40,6 @@ export function ModelsPage() {
     updateDraft,
     saveDraft,
     removeConfig,
-    markDefault,
     assignPurposeModel,
     testDraft
   } = useModelConfigStore();
@@ -50,6 +52,7 @@ export function ModelsPage() {
   const defaultConfig = configs.find((config) => config.isDefault);
   const writingConfig = configs.find((config) => config.id === usage.writingModelId);
   const reviewConfig = configs.find((config) => config.id === usage.reviewModelId);
+  const planningConfig = configs.find((config) => config.id === usage.planningModelId);
 
   function openCreateForm() {
     createConfig();
@@ -71,13 +74,6 @@ export function ModelsPage() {
         eyebrow="Providers"
         title="模型配置"
         description="先按模型类型进入：模型列表负责维护配置，写作模型和审稿模型负责从列表中选择实际使用的模型。"
-        actions={
-          view !== "types" ? (
-            <button className="ghost-button" type="button" onClick={backToTypes}>
-              返回模型类型
-            </button>
-          ) : null
-        }
       />
 
       <section className="dashboard-strip" aria-label="模型配置摘要">
@@ -95,6 +91,8 @@ export function ModelsPage() {
         </article>
       </section>
 
+      <ModelAnalysisPanel analysis={analysis} loading={loading} />
+
       {error ? <div className="test-banner failed">{error}</div> : null}
 
       {/* key 跟随模型子视图变化，点击模型类型/列表/详情时会触发轻量切换动效。 */}
@@ -103,9 +101,11 @@ export function ModelsPage() {
           <ModelTypeLanding
             configsCount={configs.length}
             loading={loading}
+            planningConfig={planningConfig}
             reviewConfig={reviewConfig}
             writingConfig={writingConfig}
             onOpenList={() => setView("list")}
+            onOpenPlanning={() => setView("planning")}
             onOpenReview={() => setView("review")}
             onOpenWriting={() => setView("writing")}
           />
@@ -117,6 +117,7 @@ export function ModelsPage() {
             loading={loading}
             selectedId={selectedId}
             onCreate={openCreateForm}
+            onBack={backToTypes}
             onOpenDetail={openDetail}
           />
         ) : null}
@@ -129,7 +130,22 @@ export function ModelsPage() {
             title="写作模型"
             description="选择 Agent 生成正文、续写章节、扩写片段时默认调用的模型。"
             actionLabel="设为写作模型"
+            onBack={backToTypes}
             onAssign={(modelId) => void assignPurposeModel("writing", modelId)}
+            onOpenDetail={openDetail}
+          />
+        ) : null}
+
+        {view === "planning" ? (
+          <PurposeModelView
+            configs={configs}
+            currentId={usage.planningModelId}
+            saving={saving}
+            title="规划模型"
+            description="选择用于作品初始化、世界观与角色设定、卷纲章节奏和伏笔布局的模型。"
+            actionLabel="设为规划模型"
+            onBack={backToTypes}
+            onAssign={(modelId) => void assignPurposeModel("planning", modelId)}
             onOpenDetail={openDetail}
           />
         ) : null}
@@ -142,6 +158,7 @@ export function ModelsPage() {
             title="审稿模型"
             description="选择 Agent 做连续性检查、AI 味检测、章节修订时默认调用的模型。"
             actionLabel="设为审稿模型"
+            onBack={backToTypes}
             onAssign={(modelId) => void assignPurposeModel("review", modelId)}
             onOpenDetail={openDetail}
           />
@@ -153,9 +170,9 @@ export function ModelsPage() {
             saving={saving}
             testing={testing}
             testResult={testResult}
+            onBack={() => setView("list")}
             onChange={updateDraft}
             onDelete={() => draft.id && void removeConfig(draft.id)}
-            onMarkDefault={() => draft.id && void markDefault(draft.id)}
             onSave={() => void saveDraft()}
             onTest={() => void testDraft()}
           />
@@ -165,14 +182,140 @@ export function ModelsPage() {
   );
 }
 
+const analysisStatusLabel: Record<ModelAnalysis["status"], string> = {
+  ready: "可运行",
+  partial: "需优化",
+  blocked: "未就绪"
+};
+
+const analysisStatusTone: Record<ModelAnalysis["status"], "sage" | "amber" | "rose"> = {
+  ready: "sage",
+  partial: "amber",
+  blocked: "rose"
+};
+
+const issueTone: Record<ModelAnalysis["issues"][number]["severity"], "sage" | "amber" | "rose" | "blue"> = {
+  info: "blue",
+  warning: "amber",
+  critical: "rose"
+};
+
+function providerLabel(provider: string) {
+  return providerOptions.find((option) => option.value === provider)?.label ?? provider;
+}
+
+interface ModelAnalysisPanelProps {
+  analysis: ModelAnalysis | null;
+  loading: boolean;
+}
+
+function ModelAnalysisPanel({ analysis, loading }: ModelAnalysisPanelProps) {
+  const visibleIssues = analysis?.issues.slice(0, 4) ?? [];
+  const visibleSuggestions = analysis?.suggestions.slice(0, 4) ?? [];
+
+  return (
+    <section className={`model-analysis-panel status-${analysis?.status ?? "loading"}`}>
+      <div className="model-analysis-hero">
+        <div>
+          <p className="eyebrow">AI Model Analysis</p>
+          <h3>模型体系分析</h3>
+          <p>
+            {analysis
+              ? "基于后端模型配置、用途路由和参数风险生成的本地诊断，不读取密钥，也不会真实调用模型。"
+              : loading
+                ? "正在从后端读取模型分析结果..."
+                : "等待后端返回模型分析结果。"}
+          </p>
+        </div>
+
+        <div className="model-analysis-score" aria-label="模型体系健康分">
+          <strong>{analysis?.score ?? 0}</strong>
+          <span>/100</span>
+          <Badge tone={analysis ? analysisStatusTone[analysis.status] : "blue"}>
+            {analysis ? analysisStatusLabel[analysis.status] : "分析中"}
+          </Badge>
+        </div>
+      </div>
+
+      <div className="model-analysis-metrics">
+        <article>
+          <span>配置总数</span>
+          <strong>{analysis?.summary.totalConfigs ?? 0}</strong>
+        </article>
+        <article>
+          <span>启用配置</span>
+          <strong>{analysis?.summary.enabledConfigs ?? 0}</strong>
+        </article>
+        <article>
+          <span>支持测试</span>
+          <strong>{analysis?.summary.supportedAdapterConfigs ?? 0}</strong>
+        </article>
+        <article>
+          <span>路由就绪</span>
+          <strong>{analysis?.summary.routeReadyCount ?? 0}/3</strong>
+        </article>
+      </div>
+
+      {analysis ? (
+        <>
+          <div className="model-route-health-grid">
+            {analysis.routes.map((route) => (
+              <article className={route.ready ? "ready" : "blocked"} key={route.routeKey}>
+                <div>
+                  <strong>{route.label}</strong>
+                  <p>{route.modelName}</p>
+                </div>
+                <Badge tone={route.ready ? "sage" : "amber"}>{route.ready ? "已就绪" : "需配置"}</Badge>
+                <small>{route.provider === "none" ? "未选择模型" : providerLabel(route.provider)}</small>
+              </article>
+            ))}
+          </div>
+
+          <div className="model-analysis-columns">
+            <div>
+              <h4>风险提示</h4>
+              {visibleIssues.length === 0 ? (
+                <p className="muted">暂未发现配置风险。</p>
+              ) : (
+                visibleIssues.map((issue) => (
+                  <article className="analysis-issue-item" key={issue.id}>
+                    <Badge tone={issueTone[issue.severity]}>{issue.title}</Badge>
+                    <p>{issue.description}</p>
+                  </article>
+                ))
+              )}
+            </div>
+
+            <div>
+              <h4>优化建议</h4>
+              {visibleSuggestions.length === 0 ? (
+                <p className="muted">暂无额外建议。</p>
+              ) : (
+                visibleSuggestions.map((suggestion) => (
+                  <article className="analysis-suggestion-item" key={suggestion}>
+                    <span />
+                    <p>{suggestion}</p>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
 interface ModelTypeLandingProps {
   configsCount: number;
   loading: boolean;
   writingConfig?: ModelConfig;
   reviewConfig?: ModelConfig;
+  planningConfig?: ModelConfig;
   onOpenList: () => void;
   onOpenWriting: () => void;
   onOpenReview: () => void;
+  onOpenPlanning: () => void;
 }
 
 function ModelTypeLanding({
@@ -180,9 +323,11 @@ function ModelTypeLanding({
   loading,
   writingConfig,
   reviewConfig,
+  planningConfig,
   onOpenList,
   onOpenWriting,
-  onOpenReview
+  onOpenReview,
+  onOpenPlanning
 }: ModelTypeLandingProps) {
   return (
     <section className="model-type-grid" aria-label="模型类型">
@@ -190,6 +335,12 @@ function ModelTypeLanding({
         <Badge tone="blue">{loading ? "加载中" : `${configsCount} 个配置`}</Badge>
         <h3>模型列表</h3>
         <p>查看、新增和维护所有模型配置。点击具体模型后进入详情表单。</p>
+      </button>
+
+      <button className="model-type-card" type="button" onClick={onOpenPlanning}>
+        <Badge tone="blue">规划链路</Badge>
+        <h3>规划模型</h3>
+        <p>当前：{planningConfig?.name ?? "未设置"}。用于作品初始化、设定生成、卷纲拆解和伏笔规划。</p>
       </button>
 
       <button className="model-type-card" type="button" onClick={onOpenWriting}>
@@ -211,11 +362,12 @@ interface ModelListViewProps {
   configs: ModelConfig[];
   loading: boolean;
   selectedId: string | null;
+  onBack: () => void;
   onCreate: () => void;
   onOpenDetail: (config: ModelConfig) => void;
 }
 
-function ModelListView({ configs, loading, selectedId, onCreate, onOpenDetail }: ModelListViewProps) {
+function ModelListView({ configs, loading, selectedId, onBack, onCreate, onOpenDetail }: ModelListViewProps) {
   return (
     <section className="model-list-view">
       <div className="section-title">
@@ -224,9 +376,15 @@ function ModelListView({ configs, loading, selectedId, onCreate, onOpenDetail }:
           <h3>模型列表</h3>
           <p className="muted">这里展示所有已配置模型。点击模型卡片进入详情，点击“新增模型”创建新配置。</p>
         </div>
-        <button className="primary-button" type="button" onClick={onCreate}>
-          新增模型
-        </button>
+        <div className="button-row">
+          <button className="ghost-button" type="button" onClick={onBack}>
+            <ArrowLeft size={16} aria-hidden="true" />
+            返回模型类型
+          </button>
+          <button className="primary-button" type="button" onClick={onCreate}>
+            新增模型
+          </button>
+        </div>
       </div>
 
       {loading ? <div className="test-banner success">正在读取模型配置...</div> : null}
@@ -256,6 +414,7 @@ interface PurposeModelViewProps {
   title: string;
   description: string;
   actionLabel: string;
+  onBack: () => void;
   onAssign: (modelId: string) => void;
   onOpenDetail: (config: ModelConfig) => void;
 }
@@ -267,6 +426,7 @@ function PurposeModelView({
   title,
   description,
   actionLabel,
+  onBack,
   onAssign,
   onOpenDetail
 }: PurposeModelViewProps) {
@@ -278,6 +438,10 @@ function PurposeModelView({
           <h3>{title}</h3>
           <p className="muted">{description}</p>
         </div>
+        <button className="ghost-button" type="button" onClick={onBack}>
+          <ArrowLeft size={16} aria-hidden="true" />
+          返回模型类型
+        </button>
       </div>
 
       <div className="model-catalog-grid">
@@ -289,7 +453,7 @@ function PurposeModelView({
                 <span className={`status-dot${config.enabled ? " online" : ""}`} />
                 <div>
                   <h4>{config.name}</h4>
-                  <p>{config.model}</p>
+                  <p>{config.apiModel}</p>
                 </div>
               </div>
               <div className="purpose-card-meta">
@@ -333,7 +497,7 @@ function ModelSummaryCard({ config, selected, onOpen }: ModelSummaryCardProps) {
         <span className={`status-dot${config.enabled ? " online" : ""}`} />
         <strong>{config.name}</strong>
       </div>
-      <p>{config.model}</p>
+      <p>{config.apiModel}</p>
       <div className="model-summary-tags">
         <Badge tone="blue">{providerOptions.find((option) => option.value === config.provider)?.label}</Badge>
         <Badge tone={config.isDefault ? "amber" : "sage"}>
@@ -349,9 +513,9 @@ interface ModelDetailViewProps {
   saving: boolean;
   testing: boolean;
   testResult: ReturnType<typeof useModelConfigStore.getState>["testResult"];
+  onBack: () => void;
   onChange: (patch: Partial<ReturnType<typeof useModelConfigStore.getState>["draft"]>) => void;
   onDelete: () => void;
-  onMarkDefault: () => void;
   onSave: () => void;
   onTest: () => void;
 }
@@ -361,12 +525,51 @@ function ModelDetailView({
   saving,
   testing,
   testResult,
+  onBack,
   onChange,
   onDelete,
-  onMarkDefault,
   onSave,
   onTest
 }: ModelDetailViewProps) {
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [discoveringModels, setDiscoveringModels] = useState(false);
+  const [modelDiscoveryError, setModelDiscoveryError] = useState("");
+  const currentApiModelMissing =
+    availableModels.length > 0 && draft.apiModel.trim().length > 0 && !availableModels.includes(draft.apiModel);
+  const apiModelOptions = [
+    ...(currentApiModelMissing
+      ? [
+          {
+            label: draft.apiModel,
+            value: draft.apiModel,
+            description: "当前保存，未出现在最新列表"
+          }
+        ]
+      : []),
+    ...availableModels.map((model) => ({ label: model, value: model }))
+  ];
+
+  async function handleDiscoverModels() {
+    setDiscoveringModels(true);
+    setModelDiscoveryError("");
+
+    try {
+      const models = await discoverAvailableModels(draft);
+      setAvailableModels(models);
+      if (!draft.apiModel.trim() && models[0]) {
+        onChange({ apiModel: models[0] });
+      }
+      if (models.length === 0) {
+        setModelDiscoveryError("API 未返回可用模型。");
+      }
+    } catch (error) {
+      setAvailableModels([]);
+      setModelDiscoveryError(error instanceof Error ? error.message : "获取模型列表失败");
+    } finally {
+      setDiscoveringModels(false);
+    }
+  }
+
   return (
     <section className="model-form-panel">
       <div className="section-title">
@@ -375,14 +578,20 @@ function ModelDetailView({
           <h3>{draft.id ? "模型详情" : "新增模型"}</h3>
           <p className="muted">这里维护单个模型的调用信息。保存后会回到模型列表可选项中。</p>
         </div>
-        <Badge tone={draft.enabled ? "sage" : "rose"}>{draft.enabled ? "启用" : "停用"}</Badge>
+        <div className="button-row">
+          <button className="ghost-button" type="button" onClick={onBack}>
+            <ArrowLeft size={16} aria-hidden="true" />
+            返回模型列表
+          </button>
+          <Badge tone={draft.enabled ? "sage" : "rose"}>{draft.enabled ? "启用" : "停用"}</Badge>
+        </div>
       </div>
 
       <div className="api-note">
-        <strong>接口预留说明</strong>
+        <strong>后端接口说明</strong>
         <p>
-          当前表单调用 `modelConfigApi.ts` 的 mock 方法。后续后端完成后，只需要替换为
-          `/api/v1/model-configs` 请求，页面和 store 不需要大改。
+          当前表单通过 `modelConfigApi.ts` 调用 `/api/v1/model-configs`，API Key 由后端写入本地
+          secrets 文件，普通配置接口不会回传真实密钥。
         </p>
       </div>
 
@@ -419,24 +628,45 @@ function ModelDetailView({
           />
         </label>
 
-        <label className="field">
-          <span>模型名称</span>
-          <input
-            value={draft.model}
-            placeholder="例如：deepseek-chat / qwen2.5:7b"
-            onChange={(event) => onChange({ model: event.target.value })}
-          />
-        </label>
+        <div className="field">
+          <span>API 调用模型</span>
+          <div className="model-discovery-row">
+            <SelectField
+              value={apiModelOptions.some((option) => option.value === draft.apiModel) ? draft.apiModel : ""}
+              options={apiModelOptions}
+              placeholder={draft.apiModel || "请先获取模型列表"}
+              disabled={apiModelOptions.length === 0}
+              onChange={(apiModel) => onChange({ apiModel })}
+            />
+            <button
+              className="ghost-button"
+              type="button"
+              disabled={discoveringModels || !draft.baseUrl.trim()}
+              onClick={() => void handleDiscoverModels()}
+            >
+              <RefreshCw size={16} aria-hidden="true" />
+              {discoveringModels ? "获取中..." : "获取模型列表"}
+            </button>
+          </div>
+          {modelDiscoveryError ? <small>{modelDiscoveryError}</small> : null}
+          {!modelDiscoveryError && availableModels.length === 0 && draft.apiModel ? (
+            <small>当前保存：{draft.apiModel}</small>
+          ) : null}
+          {currentApiModelMissing ? <small>当前保存的模型未出现在最新列表中。</small> : null}
+          {availableModels.length > 0 && draft.apiModel ? (
+            <small>保存后，此 API 配置将调用「{draft.apiModel}」。</small>
+          ) : null}
+        </div>
 
         <label className="field">
           <span>API Key</span>
           <input
             type="password"
             value={draft.apiKey}
-            placeholder="第一版前端暂存，后续交给后端加密保存"
+            placeholder="留空表示不修改已保存密钥"
             onChange={(event) => onChange({ apiKey: event.target.value })}
           />
-          <small>真实版本不要让浏览器长期保存密钥，后端应写入本地 secrets 文件。</small>
+          <small>密钥只在提交时发送给后端，列表和详情接口不会回显真实 API Key。</small>
         </label>
 
         <div className="field">
@@ -447,29 +677,6 @@ function ModelDetailView({
             onChange={(value) => onChange({ purpose: value as ModelPurpose })}
           />
         </div>
-
-        <label className="field compact">
-          <span>温度</span>
-          <input
-            max="2"
-            min="0"
-            step="0.01"
-            type="number"
-            value={draft.temperature}
-            onChange={(event) => onChange({ temperature: Number(event.target.value) })}
-          />
-        </label>
-
-        <label className="field compact">
-          <span>最大 Token</span>
-          <input
-            min="256"
-            step="256"
-            type="number"
-            value={draft.maxTokens}
-            onChange={(event) => onChange({ maxTokens: Number(event.target.value) })}
-          />
-        </label>
 
         <label className="field full">
           <span>备注</span>
@@ -513,14 +720,9 @@ function ModelDetailView({
             {testing ? "测试中..." : "测试连接"}
           </button>
           {draft.id ? (
-            <>
-              <button className="ghost-button" type="button" disabled={saving} onClick={onMarkDefault}>
-                设为默认模型
-              </button>
-              <button className="danger-button" type="button" disabled={saving} onClick={onDelete}>
-                删除
-              </button>
-            </>
+            <button className="danger-button" type="button" disabled={saving} onClick={onDelete}>
+              删除
+            </button>
           ) : null}
         </div>
       </form>

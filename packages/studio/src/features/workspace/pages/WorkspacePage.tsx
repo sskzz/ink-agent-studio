@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import type { ChangeEvent } from "react";
+import { Trash2 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { seedStyles } from "@/features/writing-styles/data/writingStyles";
+import { listWritingStyles } from "@/features/writing-styles/api/writingStylesApi";
+import type { WritingStyle } from "@/features/writing-styles/data/writingStyles";
+import { createWorkspaceBook, deleteWorkspaceBook, listWorkspaceBookDetails } from "@/shared/api/workspaceApi";
 import { Badge } from "@/shared/components/ui/Badge";
 import { MarkdownRenderer } from "@/shared/components/ui/MarkdownRenderer";
 import { PageHeader } from "@/shared/components/ui/PageHeader";
@@ -17,6 +20,8 @@ interface WorkspaceRouteState {
 interface BookDraft {
   title: string;
   genre: string;
+  narrationPerspective: string;
+  channel: string;
   writingStyleId: string;
   protagonistGender: string;
   protagonistName: string;
@@ -24,6 +29,7 @@ interface BookDraft {
   chapterWords: string;
   brief: string;
   worldFileName: string;
+  worldFileContent: string;
 }
 
 interface BookCharacter {
@@ -51,6 +57,8 @@ interface BookDetail {
   brief: string;
   writingStyleId: string;
   attributes: {
+    narrationPerspective: string;
+    channel: string;
     protagonistGender: string;
     protagonistName: string;
     plannedWords: number;
@@ -77,313 +85,35 @@ interface DetailDocument {
 const initialDraft: BookDraft = {
   title: "",
   genre: "",
+  narrationPerspective: "",
+  channel: "",
   writingStyleId: "",
   protagonistGender: "",
   protagonistName: "",
   plannedWords: "",
   chapterWords: "",
   brief: "",
-  worldFileName: ""
+  worldFileName: "",
+  worldFileContent: ""
 };
 
-const demoBooks: BookDetail[] = [
-  {
-    id: "mist-harbor-letter",
-    title: "雾港来信",
-    genre: "都市悬疑",
-    status: "规划中",
-    updatedAt: "今天 18:10",
-    brief: "旧港区连续出现无法投递的匿名来信，主角在调查中发现每一封信都提前写下了收信人即将隐瞒的秘密。",
-    writingStyleId: "style-cinematic-suspense",
-    attributes: {
-      protagonistGender: "女",
-      protagonistName: "林砚",
-      plannedWords: 620000,
-      chapterWords: 3200,
-      worldFileName: "world.md"
+function createWritingStyleOptions(styles: WritingStyle[]) {
+  return [
+    {
+      label: "交给 AI 自动选择",
+      value: "",
+      description: "根据题材、简介和目标读者自动匹配风格"
     },
-    progress: {
-      currentChapter: "第 4 章：潮湿的邮戳",
-      writtenWords: 12640,
-      writtenChapters: 3,
-      plannedChapters: 56
-    },
-    characters: [
-      {
-        id: "lin-yan",
-        name: "林砚",
-        role: "主要",
-        identity: "旧港区档案管理员 / 调查主视角",
-        markdown: `# 林砚
+    ...styles.map((style) => ({
+      label: style.name,
+      value: style.id,
+      description: style.summary
+    }))
+  ];
+}
 
-**定位**：主要角色，旧港区档案管理员。
-
-## 人物状态
-- 表面冷静，习惯把所有异常都归档成可检索的线索。
-- 对“父亲失踪案”保持回避，但匿名来信不断把她推回旧案现场。
-- 当前章节中，她已经确认来信不是恶作剧，而是某种提前发生的记录。
-
-## 写作提示
-用动作代替心理独白。她紧张时会整理袖口、检查旧钥匙、反复确认纸张边角。`
-      },
-      {
-        id: "shen-du",
-        name: "沈渡",
-        role: "主要",
-        identity: "夜班邮差 / 旧港线索提供者",
-        markdown: `# 沈渡
-
-**定位**：主要角色，旧港夜班邮差。
-
-## 人物状态
-1. 对旧港地图极熟，但会刻意避开三号码头。
-2. 与林砚保持合作关系，却隐瞒了第一封信的真实来源。
-3. 说话短促，常用反问保护自己。
-
-> 他不是不相信林砚，而是不相信自己还能把真相说完整。`
-      },
-      {
-        id: "bai-yin",
-        name: "白银儿童",
-        role: "次要",
-        identity: "传闻中的失踪儿童代称",
-        markdown: `# 白银儿童
-
-**定位**：次要角色群像，也是旧港传闻中的共同代称。
-
-## 已知信息
-- 出现在二十年前的福利院档案里。
-- 名字并非真实姓名，而是一组被涂改编号后的称呼。
-- 与“无法投递的来信”存在时间上的重叠。`
-      },
-      {
-        id: "gu-yi",
-        name: "顾医生",
-        role: "次要",
-        identity: "旧港诊所医生 / 档案见证者",
-        markdown: `# 顾医生
-
-**定位**：次要角色，旧港诊所医生。
-
-## 关系
-- 曾经给林砚父亲处理过伤口。
-- 保存着一份没有归档的病历复印件。
-
-## 禁用写法
-不要把顾医生写成单纯的谜语人。他有现实顾虑：诊所、病人、旧港居民的信任。`
-      }
-    ],
-    coreFiles: [
-      {
-        id: "brief",
-        title: "故事基石",
-        fileName: "brief.md",
-        summary: "作品核心卖点、主线问题和读者承诺。",
-        markdown: `# 故事基石
-
-## 一句话钩子
-每一封无法投递的信，都提前写下了收信人最想隐瞒的秘密。
-
-## 主线问题
-- 谁在写信？
-- 信为什么能提前出现？
-- 林砚父亲的失踪是否是第一封信造成的？
-
-## 读者承诺
-冷色电影感悬疑、旧港都市传闻、线索回收、人物克制但情绪有余温。`
-      },
-      {
-        id: "outline",
-        title: "卷纲规划",
-        fileName: "outline.md",
-        summary: "第一卷章节推进和悬念回收节奏。",
-        markdown: `# 卷纲规划
-
-## 第一卷：无法投递
-1. 林砚收到写给失踪父亲的信。
-2. 沈渡带来夜班邮路的异常记录。
-3. 三号码头出现二十年前的福利院编号。
-4. 顾医生交出未归档病历。
-
-## 节奏规则
-- 每 3 章回收一个小线索。
-- 每 8-10 章打开一个更大的旧案层级。
-- 不在段尾替读者总结恐惧，靠物件和动作收束。`
-      },
-      {
-        id: "state",
-        title: "当前状态",
-        fileName: "state/current.md",
-        summary: "当前章节上下文、已公开信息和未公开伏笔。",
-        markdown: `# 当前状态
-
-## 已公开信息
-- 林砚收到第一封信。
-- 沈渡确认邮路没有登记这封信。
-- 信纸上的潮痕只出现在三号码头仓库。
-
-## 未公开伏笔
-- 顾医生知道林砚父亲最后一次出现的位置。
-- “白银儿童”不是一个人，而是一批被隐藏身份的孩子。
-
-## 下一章目标
-让林砚进入三号码头仓库，但只发现一半证据。`
-      },
-      {
-        id: "foreshadowing",
-        title: "伏笔池",
-        fileName: "state/foreshadowing.md",
-        summary: "已投放伏笔、计划回收章节和回收方式。",
-        markdown: `# 伏笔池
-
-| 伏笔 | 投放章节 | 回收计划 |
-| --- | --- | --- |
-| 潮湿邮戳 | 第 1 章 | 第 4 章确认来自三号码头 |
-| 银色编号 | 第 2 章 | 第 9 章连接福利院档案 |
-| 沈渡避开旧桥 | 第 3 章 | 第 12 章揭示旧桥事故 |
-
-> 伏笔不要一次解释完，只给读者足够继续翻页的确定感。`
-      }
-    ],
-    worldview: {
-      id: "world",
-      title: "世界观",
-      fileName: "world.md",
-      summary: "旧港区地理、传闻规则和异常机制。",
-      markdown: `# 世界观：旧港区
-
-旧港区是城市里被新航线绕开的老城区。雾从傍晚开始贴着街面，邮局、诊所、码头仓库和废弃福利院构成第一卷主要空间。
-
-## 基础规则
-- 信件只会出现在“无人目击的投递点”。
-- 信件内容不会直接预言死亡，而是提前写出某个秘密被揭开后的结果。
-- 看到信的人越多，信上字迹越快褪色。
-
-## 写作要求
-世界观不能像设定说明书一样一次讲完。优先让规则通过事件暴露：邮戳、潮痕、褪色、误投记录。`
-    }
-  },
-  {
-    id: "star-rail-store",
-    title: "星轨便利店",
-    genre: "轻幻想",
-    status: "草稿",
-    updatedAt: "昨天 22:40",
-    brief: "一间只在流星雨夜营业的便利店，接待从不同时间线短暂停靠的客人。",
-    writingStyleId: "style-warm-growth",
-    attributes: {
-      protagonistGender: "非固定 / 群像",
-      protagonistName: "夏小满",
-      plannedWords: 360000,
-      chapterWords: 2600,
-      worldFileName: "world.md"
-    },
-    progress: {
-      currentChapter: "第 9 章：过期的星图汽水",
-      writtenWords: 21480,
-      writtenChapters: 8,
-      plannedChapters: 38
-    },
-    characters: [
-      {
-        id: "xia-xiaoman",
-        name: "夏小满",
-        role: "主要",
-        identity: "便利店店员 / 群像连接点",
-        markdown: `# 夏小满
-
-**定位**：主要角色，星轨便利店店员。
-
-## 人物状态
-- 不擅长安慰别人，但记得每位客人的购物习惯。
-- 她的成长线不是变得强大，而是学会承认“不舍得”。
-
-## 细节
-她会把临期商品贴上手写便签，便签经常比商品本身更受欢迎。`
-      },
-      {
-        id: "clock-cat",
-        name: "钟表猫",
-        role: "次要",
-        identity: "便利店收银台上的时间管理者",
-        markdown: `# 钟表猫
-
-**定位**：次要角色，负责提醒营业时间。
-
-## 规则
-- 只在整点说话。
-- 说话时不会看人，只看收银台旁边那只旧钟。
-- 它知道每位客人来自哪条时间线，但通常只给半句提示。`
-      }
-    ],
-    coreFiles: [
-      {
-        id: "brief",
-        title: "故事基石",
-        fileName: "brief.md",
-        summary: "轻幻想群像的核心情绪和单元结构。",
-        markdown: `# 故事基石
-
-## 核心卖点
-一家只在流星雨夜营业的便利店，卖给客人的不是商品，而是一次与遗憾和解的机会。
-
-## 单元结构
-- 客人到店。
-- 商品触发记忆。
-- 店员参与但不过度拯救。
-- 客人带走一件小东西，现实发生轻微改变。`
-      },
-      {
-        id: "state",
-        title: "当前状态",
-        fileName: "state/current.md",
-        summary: "当前营业夜、客人状态和未完成物品线。",
-        markdown: `# 当前状态
-
-## 当前营业夜
-第 3 次流星雨夜，便利店货架出现“星图汽水”。
-
-## 未完成物品线
-- 星图汽水：连接童年约定。
-- 透明雨伞：连接未来告别。
-- 无声口琴：连接父女误会。`
-      }
-    ],
-    worldview: {
-      id: "world",
-      title: "世界观",
-      fileName: "world.md",
-      summary: "星轨便利店营业规则和时间线边界。",
-      markdown: `# 世界观：星轨便利店
-
-星轨便利店位于一条不存在于地图上的街角，只在流星雨夜营业。不同时间线的人会短暂停靠，但不能长期改变彼此的人生。
-
-## 规则
-1. 客人只能买走一件商品。
-2. 商品会指向一个遗憾，但不会直接替人解决遗憾。
-3. 天亮前必须离店，否则会忘记这次营业夜。
-
-## 风格要求
-世界观要轻，不要重设定。用货架、价签、便签和客人的小动作传递规则。`
-    }
-  }
-];
-
-const writingStyleOptions = [
-  {
-    label: "交给 AI 自动选择",
-    value: "",
-    description: "根据题材、简介和目标读者自动匹配风格"
-  },
-  ...seedStyles.map((style) => ({
-    label: style.name,
-    value: style.id,
-    description: style.summary
-  }))
-];
-
-function getWritingStyleName(styleId: string) {
-  return seedStyles.find((style) => style.id === styleId)?.name ?? "";
+function getWritingStyleName(styles: WritingStyle[], styleId: string) {
+  return styles.find((style) => style.id === styleId)?.name ?? "";
 }
 
 function formatNumber(value: number) {
@@ -393,13 +123,10 @@ function formatNumber(value: number) {
 /**
  * 作品库页面。
  *
- * 第一版只做前端页面状态，不真正落盘：
- * - 作品列表：展示本地作品卡片，点击进入作品详情。
- * - 作品详情：展示作品属性、写作进度、角色、核心文件和世界观。
- * - 文档弹窗：角色/核心文件/世界观使用 MarkdownRenderer 渲染 mock md 内容。
- *
- * 后续接后端时，建议在详情页加载：
- * GET /api/v1/books/:id 读取 brief.md、outline.md、state/*.json、world.md 和角色文件。
+ * 当前页面优先读取后端本地 workspace：
+ * - 作品列表和详情来自 /api/v1/books。
+ * - 核心文件和世界观通过 MarkdownRenderer 渲染后端读取的 md 内容。
+ * - 新建作品会真实写入本地作品目录；后端不可用时才展示前端预览兜底。
  */
 export function WorkspacePage() {
   const navigate = useNavigate();
@@ -407,10 +134,16 @@ export function WorkspacePage() {
   const [view, setView] = useState<WorkspaceView>("list");
   const [draft, setDraft] = useState<BookDraft>(initialDraft);
   const [createdDraft, setCreatedDraft] = useState<BookDraft | null>(null);
-  const [selectedBookId, setSelectedBookId] = useState(demoBooks[0]?.id ?? "");
+  const [books, setBooks] = useState<BookDetail[]>([]);
+  const [writingStyles, setWritingStyles] = useState<WritingStyle[]>([]);
+  const [selectedBookId, setSelectedBookId] = useState("");
   const [activeDocument, setActiveDocument] = useState<DetailDocument | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState("");
 
-  const selectedBook = demoBooks.find((book) => book.id === selectedBookId) ?? demoBooks[0];
+  const selectedBook = books.find((book) => book.id === selectedBookId) ?? books[0];
+  const writingStyleOptions = createWritingStyleOptions(writingStyles);
 
   useEffect(() => {
     const routeState = location.state as WorkspaceRouteState | null;
@@ -422,6 +155,44 @@ export function WorkspacePage() {
       navigate("/workspace", { replace: true, state: null });
     }
   }, [location.state, navigate]);
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadWorkspaceData() {
+      setLoading(true);
+
+      try {
+        const [nextBooks, nextStyles] = await Promise.all([listWorkspaceBookDetails(), listWritingStyles()]);
+
+        if (!ignore) {
+          setBooks(nextBooks);
+          setWritingStyles(nextStyles);
+          setSelectedBookId((currentId) =>
+            nextBooks.some((book) => book.id === currentId) ? currentId : nextBooks[0]?.id ?? ""
+          );
+          setFeedback("");
+        }
+      } catch (error) {
+        if (!ignore) {
+          setBooks([]);
+          setWritingStyles([]);
+          setSelectedBookId("");
+          setFeedback(`后端作品库读取失败：${toMessage(error)}`);
+        }
+      } finally {
+        if (!ignore) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadWorkspaceData();
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
 
   function updateDraft(patch: Partial<BookDraft>) {
     setDraft((currentDraft) => ({
@@ -449,17 +220,70 @@ export function WorkspacePage() {
   }
 
   function handleWorldFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const fileName = event.target.files?.[0]?.name ?? "";
-    updateDraft({ worldFileName: fileName });
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      updateDraft({ worldFileName: "", worldFileContent: "" });
+      return;
+    }
+
+    updateDraft({ worldFileName: file.name, worldFileContent: "" });
+
+    // 新建作品时需要把用户上传的 world.md 正文写入后端，而不是只记录文件名。
+    void file
+      .text()
+      .then((content) => {
+        updateDraft({ worldFileName: file.name, worldFileContent: content });
+      })
+      .catch(() => {
+        setFeedback("世界观 Markdown 文件读取失败，请重新选择 .md 文件后再创建作品。");
+      });
   }
 
-  function saveDraft() {
-    setCreatedDraft(draft);
-    setView("preview");
+  async function saveDraft() {
+    setSaving(true);
+
+    try {
+      const createdBook = await createWorkspaceBook(draft);
+      setBooks((currentBooks) => [createdBook, ...currentBooks.filter((book) => book.id !== createdBook.id)]);
+      setSelectedBookId(createdBook.id);
+      setCreatedDraft(null);
+      setFeedback("作品已创建到后端本地 workspace。");
+      setView("detail");
+    } catch (error) {
+      setCreatedDraft(draft);
+      setFeedback(`后端创建失败，已保留前端预览供检查：${toMessage(error)}`);
+      setView("preview");
+    } finally {
+      setSaving(false);
+    }
   }
 
   function continueWriting() {
     navigate("/editor", { state: { fromBookId: selectedBook?.id ?? selectedBookId } });
+  }
+
+  async function deleteSelectedBook() {
+    if (!selectedBook || !window.confirm(`确定永久删除《${selectedBook.title}》吗？相关数据库记录和 Markdown 文件将全部删除，此操作无法撤销。`)) {
+      return;
+    }
+
+    setSaving(true);
+    setFeedback("");
+
+    try {
+      await deleteWorkspaceBook(selectedBook.id);
+      const nextBooks = books.filter((book) => book.id !== selectedBook.id);
+      setBooks(nextBooks);
+      setSelectedBookId(nextBooks[0]?.id ?? "");
+      setActiveDocument(null);
+      setView("list");
+      setFeedback(`《${selectedBook.title}》及其全部关联数据已删除。`);
+    } catch (error) {
+      setFeedback(`作品删除失败：${toMessage(error)}`);
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -482,6 +306,10 @@ export function WorkspacePage() {
               <button className="primary-button" type="button" onClick={continueWriting}>
                 继续写作
               </button>
+              <button className="danger-button" type="button" disabled={saving} onClick={() => void deleteSelectedBook()}>
+                <Trash2 size={16} aria-hidden="true" />
+                删除作品
+              </button>
               <button className="ghost-button" type="button" onClick={openListView}>
                 返回作品库
               </button>
@@ -494,11 +322,16 @@ export function WorkspacePage() {
         }
       />
 
-      {view === "list" ? <BookListView onOpenDetail={openDetailView} /> : null}
+      {loading ? <div className="test-banner">正在读取后端作品库...</div> : null}
+      {saving ? <div className="test-banner">正在同步后端作品数据...</div> : null}
+      {feedback ? <div className="test-banner success">{feedback}</div> : null}
+
+      {view === "list" ? <BookListView books={books} onOpenDetail={openDetailView} /> : null}
 
       {view === "detail" && selectedBook ? (
         <BookDetailView
           book={selectedBook}
+          writingStyles={writingStyles}
           onOpenDocument={setActiveDocument}
         />
       ) : null}
@@ -506,13 +339,17 @@ export function WorkspacePage() {
       {view === "create" ? (
         <CreateBookView
           draft={draft}
+          saving={saving}
+          writingStyleOptions={writingStyleOptions}
           onFileChange={handleWorldFileChange}
           onSave={saveDraft}
           onUpdate={updateDraft}
         />
       ) : null}
 
-      {view === "preview" && createdDraft ? <BookPreviewView draft={createdDraft} onCreateAnother={openCreateView} /> : null}
+      {view === "preview" && createdDraft ? (
+        <BookPreviewView draft={createdDraft} writingStyles={writingStyles} onCreateAnother={openCreateView} />
+      ) : null}
 
       {activeDocument ? <DocumentModal document={activeDocument} onClose={() => setActiveDocument(null)} /> : null}
     </div>
@@ -520,10 +357,11 @@ export function WorkspacePage() {
 }
 
 interface BookListViewProps {
+  books: BookDetail[];
   onOpenDetail: (bookId: string) => void;
 }
 
-function BookListView({ onOpenDetail }: BookListViewProps) {
+function BookListView({ books, onOpenDetail }: BookListViewProps) {
   return (
     <section className="workspace-layout book-list-layout">
       <div className="book-list-panel">
@@ -531,12 +369,15 @@ function BookListView({ onOpenDetail }: BookListViewProps) {
           <div>
             <p className="eyebrow">Library</p>
             <h3>作品列表</h3>
-            <p className="muted">点击作品卡片进入详情。第一版数据只保存在前端 mock 中，后续会读取本地作品目录。</p>
+            <p className="muted">点击作品卡片进入详情。这里完全使用后端本地作品目录数据。</p>
           </div>
         </div>
 
         <div className="book-card-grid">
-          {demoBooks.map((book) => (
+          {books.length === 0 ? (
+            <div className="empty-list">后端作品库暂无数据。点击右上角“新建作品”创建第一本作品。</div>
+          ) : null}
+          {books.map((book) => (
             <button className="book-card book-card-button" key={book.id} type="button" onClick={() => onOpenDetail(book.id)}>
               <div className="style-card-head">
                 <div>
@@ -565,13 +406,16 @@ function BookListView({ onOpenDetail }: BookListViewProps) {
 
 interface BookDetailViewProps {
   book: BookDetail;
+  writingStyles: WritingStyle[];
   onOpenDocument: (document: DetailDocument) => void;
 }
 
-function BookDetailView({ book, onOpenDocument }: BookDetailViewProps) {
+function BookDetailView({ book, writingStyles, onOpenDocument }: BookDetailViewProps) {
   const attributeRows = [
     ["作品类型", book.genre],
-    ["写作风格", getWritingStyleName(book.writingStyleId) || "AI 自动选择"],
+    ["写作风格", getWritingStyleName(writingStyles, book.writingStyleId) || "AI 自动选择"],
+    ["人称", book.attributes.narrationPerspective],
+    ["频道", book.attributes.channel],
     ["主角性别", book.attributes.protagonistGender],
     ["主角姓名", book.attributes.protagonistName],
     ["小说计划字数", `${formatNumber(book.attributes.plannedWords)} 字`],
@@ -705,7 +549,7 @@ function BookDetailView({ book, onOpenDocument }: BookDetailViewProps) {
           >
             <span>WORLD.MD</span>
             <strong>{book.worldview.summary}</strong>
-            <p>当前为模拟 Markdown 内容，后续会从本地作品目录读取并实时渲染。</p>
+            <p>内容来自本地作品目录中的 Markdown 文件，上传的世界观 md 会在这里渲染。</p>
           </button>
         </section>
       </div>
@@ -715,12 +559,21 @@ function BookDetailView({ book, onOpenDocument }: BookDetailViewProps) {
 
 interface CreateBookViewProps {
   draft: BookDraft;
+  saving: boolean;
+  writingStyleOptions: ReturnType<typeof createWritingStyleOptions>;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
   onSave: () => void;
   onUpdate: (patch: Partial<BookDraft>) => void;
 }
 
-function CreateBookView({ draft, onFileChange, onSave, onUpdate }: CreateBookViewProps) {
+function CreateBookView({
+  draft,
+  saving,
+  writingStyleOptions,
+  onFileChange,
+  onSave,
+  onUpdate
+}: CreateBookViewProps) {
   return (
     <section className="workspace-layout book-create-layout">
       <div className="book-form-panel">
@@ -738,7 +591,7 @@ function CreateBookView({ draft, onFileChange, onSave, onUpdate }: CreateBookVie
             <span>作品名称</span>
             <input
               value={draft.title}
-              placeholder="例如：雾港来信"
+              placeholder="例如：星海归档"
               onChange={(event) => onUpdate({ title: event.target.value })}
             />
             <small>可选。不填时 AI 会根据简介和题材生成临时作品名。</small>
@@ -753,6 +606,34 @@ function CreateBookView({ draft, onFileChange, onSave, onUpdate }: CreateBookVie
             />
             <small>可选。不填时 AI 会根据作品简介推断题材。</small>
           </label>
+
+          <div className="field">
+            <span>人称</span>
+            <SelectField
+              value={draft.narrationPerspective}
+              options={[
+                { label: "交给 AI 选择", value: "", description: "根据题材和目标读者自动选择叙事人称" },
+                { label: "第一人称", value: "第一人称" },
+                { label: "第三人称", value: "第三人称" }
+              ]}
+              onChange={(value) => onUpdate({ narrationPerspective: value })}
+            />
+            <small>可选。不选时 AI 会根据作品类型推荐人称。</small>
+          </div>
+
+          <div className="field">
+            <span>频道</span>
+            <SelectField
+              value={draft.channel}
+              options={[
+                { label: "交给 AI 选择", value: "", description: "根据题材、主角和读者定位自动选择频道" },
+                { label: "男频", value: "男频" },
+                { label: "女频", value: "女频" }
+              ]}
+              onChange={(value) => onUpdate({ channel: value })}
+            />
+            <small>可选。不选时 AI 会根据作品定位生成频道建议。</small>
+          </div>
 
           <div className="field full">
             <span>写作风格</span>
@@ -831,14 +712,14 @@ function CreateBookView({ draft, onFileChange, onSave, onUpdate }: CreateBookVie
               <span className="source-upload-icon">MD</span>
               <div>
                 <strong>{draft.worldFileName || "上传世界观 md 文件"}</strong>
-                <p>可选。若不上传，AI 会根据作品简介生成 `world.md`、角色初稿和世界状态 JSON。</p>
+                <p>可选。上传后会写入作品目录的 `world.md`；若不上传，AI 后续会根据作品简介生成世界观。</p>
               </div>
             </label>
           </div>
 
           <div className="button-row">
-            <button className="primary-button" type="button" onClick={onSave}>
-              生成作品创建预览
+            <button className="primary-button" type="button" disabled={saving} onClick={onSave}>
+              {saving ? "正在创建作品..." : "创建作品"}
             </button>
             <button className="ghost-button" type="button" onClick={() => onUpdate(initialDraft)}>
               清空表单
@@ -852,14 +733,17 @@ function CreateBookView({ draft, onFileChange, onSave, onUpdate }: CreateBookVie
 
 interface BookPreviewViewProps {
   draft: BookDraft;
+  writingStyles: WritingStyle[];
   onCreateAnother: () => void;
 }
 
-function BookPreviewView({ draft, onCreateAnother }: BookPreviewViewProps) {
+function BookPreviewView({ draft, writingStyles, onCreateAnother }: BookPreviewViewProps) {
   const previewRows = [
     ["作品名称", draft.title || "AI 自动生成"],
     ["题材类型", draft.genre || "AI 自动推断"],
-    ["写作风格", getWritingStyleName(draft.writingStyleId) || "AI 自动选择"],
+    ["写作风格", getWritingStyleName(writingStyles, draft.writingStyleId) || "AI 自动选择"],
+    ["人称", draft.narrationPerspective || "AI 自动选择"],
+    ["频道", draft.channel || "AI 自动选择"],
     ["主角性别", draft.protagonistGender || "AI 自动生成"],
     ["主角姓名", draft.protagonistName || "AI 自动生成"],
     ["小说计划字数", draft.plannedWords ? `${draft.plannedWords} 字` : "AI 推荐总字数"],
@@ -873,9 +757,9 @@ function BookPreviewView({ draft, onCreateAnother }: BookPreviewViewProps) {
         <div>
           <p className="eyebrow">Preview</p>
           <h3>作品创建预览</h3>
-          <p className="muted">这一步暂不真实创建文件，只展示未来会提交给后端的作品属性和 AI 补全范围。</p>
+          <p className="muted">后端创建失败时展示此预览，方便检查即将提交的作品属性和 AI 补全范围。</p>
         </div>
-        <Badge tone="amber">Mock</Badge>
+        <Badge tone="amber">本地预览</Badge>
       </div>
 
       <div className="book-preview-grid">
@@ -924,4 +808,8 @@ function DocumentModal({ document, onClose }: DocumentModalProps) {
       </section>
     </div>
   );
+}
+
+function toMessage(error: unknown) {
+  return error instanceof Error ? error.message : "未知错误";
 }
