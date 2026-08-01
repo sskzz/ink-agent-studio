@@ -14,14 +14,16 @@ function getSceneName(pathname: string) {
 export function AppShell() {
   const { sidebarCollapsed, toggleSidebar } = useWorkspaceStore();
   const location = useLocation();
-  const isDashboardRoute = location.pathname === "/";
   const isEditorRoute = location.pathname === "/editor";
   const isAntiAiRoute = location.pathname === "/anti-ai";
   const sceneName = getSceneName(location.pathname);
+  const currentPage = navigationItems.find((item) => (
+    item.to === "/" ? location.pathname === "/" : location.pathname.startsWith(item.to)
+  )) ?? navigationItems[0];
 
   return (
     <div
-      className={`app-shell ink-shell scene-${sceneName}${sidebarCollapsed ? " sidebar-collapsed" : ""}${isDashboardRoute ? " dashboard-shell" : ""}${isEditorRoute ? " editor-shell" : ""}${isAntiAiRoute ? " anti-ai-shell" : ""}`}
+      className={`app-shell ink-shell scene-${sceneName}${sidebarCollapsed ? " sidebar-collapsed" : ""}${isEditorRoute ? " editor-shell" : ""}${isAntiAiRoute ? " anti-ai-shell" : ""}`}
       data-scene={sceneName}
     >
       {!isEditorRoute ? (
@@ -53,7 +55,7 @@ export function AppShell() {
           </div>
 
           <div className="sidebar-expandable">
-            <Link className="sidebar-create-button" to="/workspace">
+            <Link className="sidebar-create-button" state={{ view: "create" }} to="/workspace">
               <SquarePen size={17} />
               <span>新建作品</span>
               <kbd>Ctrl K</kbd>
@@ -94,11 +96,11 @@ export function AppShell() {
       ) : null}
 
       <main className="main-stage">
-        {!isEditorRoute && !isDashboardRoute ? (
+        {!isEditorRoute ? (
           <header className="topbar">
             <div>
-              <p className="eyebrow">{shellCopy.topbarEyebrow}</p>
-              <h2>{shellCopy.topbarTitle}</h2>
+              <p className="eyebrow">{currentPage.eyebrow}</p>
+              <h2>{currentPage.label}</h2>
             </div>
             <div className="topbar-actions" aria-label="工作台状态">
               <span className="status-pill">{shellCopy.statusPills[0]}</span>

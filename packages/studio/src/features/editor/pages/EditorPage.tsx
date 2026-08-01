@@ -1,42 +1,15 @@
 import type { LucideIcon } from "lucide-react";
-import { Archive, ArrowLeft, BookOpenText, Bot, Box, ChevronLeft, ChevronRight, CircleDotDashed, Eye, FileText, Flag, FolderOpen, Layers3, ListTree, MapPin, MessageCircle, Package, PencilLine, Plus, Settings2, Sparkles, Tags, UserRound, UsersRound } from "lucide-react";
+import { Archive, ArrowLeft, BookOpenText, ChevronLeft, ChevronRight, CircleDotDashed, Eye, FileText, Flag, FolderOpen, Layers3, ListTree, MapPin, Package, Plus, Settings2, Tags, UserRound, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { getWorkspaceBookDetail } from "@/shared/api/workspaceApi";
 import type { WorkspaceBookDetail } from "@/shared/api/workspaceApi";
+import { AssistantChat, InspirationPanel } from "@/features/editor/components/AssistantPanels";
+import { EditorMainPanel } from "@/features/editor/components/EditorMainPanel";
+import type { EditorField, EditorNavGroup, EditorNavItem } from "@/features/editor/types";
 
 type EditorTab = "info" | "chapters" | "drafts";
 type AssistantTab = "chat" | "inspiration";
-type EditorPanelKind = "detail" | "empty" | "chapter" | "draft" | "role-manager" | "create-entity";
-
-interface EditorField {
-  hint?: string;
-  label: string;
-  value: string;
-}
-
-interface EditorNavItem {
-  chips?: string[];
-  createDescriptionLabel?: string;
-  createNameLabel?: string;
-  createPlaceholder?: string;
-  fields?: EditorField[];
-  icon: LucideIcon;
-  id: string;
-  kind: EditorPanelKind;
-  meta?: string;
-  paragraphs?: string[];
-  summary: string;
-  title: string;
-}
-
-interface EditorNavGroup {
-  addItemId?: string;
-  id: string;
-  items: EditorNavItem[];
-  title: string;
-}
-
 interface EditorRouteState {
   fromBookId?: string;
 }
@@ -93,19 +66,6 @@ const specialEditorItems: Record<string, EditorNavItem> = {
   }
 };
 
-const assistantMessages = [
-  {
-    author: "创作助手",
-    content: "已读取当前作品设定、章节规划和角色状态。你可以直接输入下一步写作目标，我会协助整理线索、生成草稿或检查设定一致性。",
-    note: "内容由 AI 生成，仅供参考。"
-  }
-];
-
-const inspirationCards = [
-  { label: "工作流", value: "从细纲生成章节，再进入审稿与润色。" },
-  { label: "其他", value: "后续可接入灵感收藏、设定片段和临时脑洞。" }
-];
-
 function flattenGroups(groups: EditorNavGroup[]) {
   return groups.flatMap((group) => group.items);
 }
@@ -128,6 +88,37 @@ function createFileNavItem(file: WorkspaceBookDetail["coreFiles"][number], icon:
     summary: file.summary || "后端暂未返回该文件摘要。",
     title: file.title
   };
+}
+
+function createEntityNavItems(
+  entities: WorkspaceBookDetail["factions"],
+  icon: LucideIcon,
+  empty: { id: string; title: string; summary: string }
+): EditorNavItem[] {
+  if (entities.length === 0) {
+    return [{
+      icon,
+      id: empty.id,
+      kind: "empty",
+      meta: "暂无数据",
+      paragraphs: [`AI 初始化完成后会在这里显示${empty.title}设定。`],
+      summary: empty.summary,
+      title: empty.title
+    }];
+  }
+  return entities.map((entity) => ({
+    fields: [
+      { label: "定位", value: entity.role || "未分类" },
+      { label: "描述", value: entity.description || "暂无描述" }
+    ],
+    icon,
+    id: `${entity.entityType}-${entity.id}`,
+    kind: "detail",
+    meta: entity.role || "AI 生成",
+    paragraphs: [entity.markdown],
+    summary: entity.description || `${entity.name}的作品设定。`,
+    title: entity.name
+  }));
 }
 
 function createBookAwareNavigation(book: WorkspaceBookDetail): Record<EditorTab, EditorNavGroup[]> {
@@ -288,49 +279,19 @@ function createBookAwareNavigation(book: WorkspaceBookDetail): Record<EditorTab,
         id: "faction",
         title: "势力",
         addItemId: "create-faction",
-        items: [
-          {
-            icon: Flag,
-            id: "faction-empty",
-            kind: "empty",
-            meta: "暂无数据",
-            paragraphs: ["势力列表接口尚未接入编辑器页，当前不再显示前端示例势力。"],
-            summary: "组织、阵营和关系网。",
-            title: "势力"
-          }
-        ]
+        items: createEntityNavItems(book.factions, Flag, { id: "faction-empty", title: "势力", summary: "组织、阵营和关系网。" })
       },
       {
         id: "locations",
         title: "地点",
         addItemId: "create-location",
-        items: [
-          {
-            icon: MapPin,
-            id: "locations-empty",
-            kind: "empty",
-            meta: "暂无数据",
-            paragraphs: ["地点列表接口尚未接入编辑器页，当前不再显示前端示例地点。"],
-            summary: "关键场景和可用线索。",
-            title: "地点"
-          }
-        ]
+        items: createEntityNavItems(book.locations, MapPin, { id: "locations-empty", title: "地点", summary: "关键场景和可用线索。" })
       },
       {
         id: "items",
         title: "物品",
         addItemId: "create-item",
-        items: [
-          {
-            icon: Package,
-            id: "items-empty",
-            kind: "empty",
-            meta: "暂无数据",
-            paragraphs: ["物品列表接口尚未接入编辑器页，当前不再显示前端示例物品。"],
-            summary: "关键道具、信件和证物。",
-            title: "物品"
-          }
-        ]
+        items: createEntityNavItems(book.items, Package, { id: "items-empty", title: "物品", summary: "关键道具、信件和证物。" })
       }
     ],
     chapters: [
@@ -647,201 +608,6 @@ export function EditorPage() {
   );
 }
 
-function EditorMainPanel({ item }: { item: EditorNavItem }) {
-  return (
-    <article className="novel-editor-card">
-      <header className="novel-editor-card-head">
-        <div>
-          <h2>{item.title}</h2>
-          <p>{item.summary}</p>
-        </div>
-      </header>
-
-      <div className={`novel-editor-card-body ${item.kind}`}>
-        {item.kind === "empty" ? (
-          <div className="novel-editor-empty">
-            <CircleDotDashed size={18} />
-            <strong>暂无设定</strong>
-            <p>{item.paragraphs?.[0] ?? "后续可以在这里补充设定，AI 也可以根据上下文自动生成初稿。"}</p>
-          </div>
-        ) : null}
-
-        {item.kind === "role-manager" ? <RoleManagerPanel /> : null}
-
-        {item.kind === "create-entity" ? <CreateEntityPanel item={item} /> : null}
-
-        {item.fields ? (
-          <dl className="novel-editor-field-grid">
-            {item.fields.map((field) => (
-              <div key={field.label}>
-                <dt>{field.label}</dt>
-                <dd>{field.value}</dd>
-                {field.hint ? <small>{field.hint}</small> : null}
-              </div>
-            ))}
-          </dl>
-        ) : null}
-
-        {item.chips ? (
-          <div className="novel-editor-chip-list">
-            {item.chips.map((chip) => (
-              <span key={chip}>{chip}</span>
-            ))}
-          </div>
-        ) : null}
-
-        {item.kind === "chapter" ? (
-          <textarea
-            className="novel-editor-writing-area"
-            defaultValue={item.paragraphs?.join("\n\n") ?? ""}
-          />
-        ) : null}
-
-        {item.kind === "draft" ? (
-          <div className="novel-editor-empty">
-            <Archive size={18} />
-            <strong>暂时没有内容，快来添加吧</strong>
-            <p>草稿箱将用于保存 AI 生成但尚未采纳的章节版本。</p>
-          </div>
-        ) : null}
-
-        {item.paragraphs && item.kind !== "empty" && item.kind !== "draft" ? (
-          <div className="novel-editor-paragraphs">
-            {item.paragraphs.map((paragraph) => (
-              <p key={paragraph}>{paragraph}</p>
-            ))}
-          </div>
-        ) : null}
-      </div>
-    </article>
-  );
-}
-
-function RoleManagerPanel() {
-  return (
-    <div className="novel-role-manager">
-      <section>
-        <div className="novel-role-section-head">
-          <h3>主要角色</h3>
-          <button type="button">
-            <Plus size={14} />
-            添加角色
-          </button>
-        </div>
-        <div className="novel-role-card-grid">
-          <article className="novel-role-card">
-            <span>暂无主要角色</span>
-            <p>角色新增功能接入后端后，会在这里展示真实角色数据。</p>
-          </article>
-        </div>
-      </section>
-
-      <section>
-        <div className="novel-role-section-head">
-          <h3>次要角色</h3>
-          <button type="button">
-            <Plus size={14} />
-            添加角色
-          </button>
-        </div>
-        <div className="novel-role-card-grid">
-          <article className="novel-role-card">
-            <span>暂无次要角色</span>
-            <p>当前不再显示前端示例角色，避免和后端接口数据混淆。</p>
-          </article>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function CreateEntityPanel({ item }: { item: EditorNavItem }) {
-  return (
-    <form className="novel-create-entity-form" onSubmit={(event) => event.preventDefault()}>
-      <label>
-        <span>{item.createNameLabel ?? "名称"}</span>
-        <input placeholder={item.createPlaceholder ?? "请输入名称"} />
-      </label>
-      <label>
-        <span>{item.createDescriptionLabel ?? "描述"}</span>
-        <textarea placeholder="输入设定说明、可用线索、限制条件或后续需要 AI 补全的方向。" />
-      </label>
-      <div className="novel-create-entity-actions">
-        <button className="primary-button" type="button">
-          保存为模拟设定
-        </button>
-        <button className="ghost-button" type="reset">
-          清空
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function AssistantChat() {
-  return (
-    <div className="novel-assistant-chat">
-      <div className="novel-assistant-tools" aria-label="AI 对话工具">
-        <Bot size={15} />
-        <span>默认创作工具</span>
-      </div>
-
-      <div className="novel-assistant-messages">
-        {assistantMessages.map((message) => (
-          <article className="novel-assistant-message" key={message.content}>
-            <div className="novel-assistant-avatar">
-              <Bot size={15} />
-            </div>
-            <div>
-              <strong>{message.author}</strong>
-              <p>{message.content}</p>
-              <small>{message.note}</small>
-            </div>
-          </article>
-        ))}
-      </div>
-
-      <div className="novel-assistant-input">
-        <div>
-          <MessageCircle size={14} />
-          <span>AI对话</span>
-          <small>0/50000 字</small>
-        </div>
-        <textarea placeholder="输入写作目标、章节动作或设定问题。按 Enter 发送，Shift + Enter 换行。" />
-      </div>
-    </div>
-  );
-}
-
 function toMessage(error: unknown) {
   return error instanceof Error ? error.message : "未知错误";
-}
-
-function InspirationPanel() {
-  return (
-    <div className="novel-inspiration-panel">
-      <div className="novel-inspiration-filter">
-        <button className="active" type="button">
-          <Sparkles size={14} />
-          工作流
-        </button>
-        <button type="button">
-          <Box size={14} />
-          其他
-        </button>
-      </div>
-
-      <div className="novel-inspiration-list">
-        {inspirationCards.map((card) => (
-          <article className="novel-inspiration-card" key={card.label}>
-            <div>
-              <PencilLine size={15} />
-              <strong>{card.label}</strong>
-            </div>
-            <p>{card.value}</p>
-          </article>
-        ))}
-      </div>
-    </div>
-  );
 }

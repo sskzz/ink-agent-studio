@@ -1,13 +1,14 @@
 import type { LucideIcon } from "lucide-react";
 import {
   BookOpenText,
-  Bot,
-  BrainCircuit,
   ClipboardList,
+  Fingerprint,
   LibraryBig,
   Palette,
   Settings,
-  SlidersHorizontal
+  ShieldCheck,
+  SlidersHorizontal,
+  WandSparkles
 } from "lucide-react";
 
 export interface NavigationItem {
@@ -15,27 +16,88 @@ export interface NavigationItem {
   label: string;
   icon: LucideIcon;
   section: "创作" | "智能协作" | "系统";
+  eyebrow: string;
+  description: string;
 }
 
 // 顶层导航配置集中维护，新增功能页时优先在这里补入口。
 export const navigationItems: NavigationItem[] = [
-  { to: "/", label: "总览", icon: LibraryBig, section: "创作" },
-  { to: "/workspace", label: "作品库", icon: BookOpenText, section: "创作" },
-  { to: "/styles", label: "写作风格", icon: Palette, section: "创作" },
-  { to: "/agent", label: "Agent 控制台", icon: Bot, section: "智能协作" },
-  { to: "/state", label: "世界状态", icon: BrainCircuit, section: "智能协作" },
-  { to: "/models", label: "模型配置", icon: SlidersHorizontal, section: "智能协作" },
-  { to: "/runs", label: "运行记录", icon: ClipboardList, section: "智能协作" },
-  { to: "/settings", label: "设置", icon: Settings, section: "系统" }
+  {
+    to: "/",
+    label: "总览",
+    icon: LibraryBig,
+    section: "创作",
+    eyebrow: "Workspace",
+    description: "查看当前已经接入的创作、质量控制和运行管理能力。"
+  },
+  {
+    to: "/workspace",
+    label: "作品库",
+    icon: BookOpenText,
+    section: "创作",
+    eyebrow: "Books",
+    description: "创建和管理本地作品，并从作品详情进入章节编辑器。"
+  },
+  {
+    to: "/styles",
+    label: "写作风格",
+    icon: Palette,
+    section: "创作",
+    eyebrow: "Writing Style",
+    description: "用本地文本样本分析、保存和版本化写作风格。"
+  },
+  {
+    to: "/anti-ai",
+    label: "去 AI 味",
+    icon: ShieldCheck,
+    section: "创作",
+    eyebrow: "Quality Rules",
+    description: "查看正文生成、审稿和修订共用的去 AI 味约束。"
+  },
+  {
+    to: "/skills",
+    label: "小说技能",
+    icon: WandSparkles,
+    section: "创作",
+    eyebrow: "Novel Skills",
+    description: "管理按任务渐进加载的规划、写作和审稿技能。"
+  },
+  {
+    to: "/memory",
+    label: "偏好记忆",
+    icon: Fingerprint,
+    section: "创作",
+    eyebrow: "User Memory",
+    description: "审批稳定的写作协作偏好，并预览实际提示词注入内容。"
+  },
+  {
+    to: "/models",
+    label: "模型配置",
+    icon: SlidersHorizontal,
+    section: "智能协作",
+    eyebrow: "Models",
+    description: "维护模型连接并配置规划、写作和审稿调用链路。"
+  },
+  {
+    to: "/runs",
+    label: "运行记录",
+    icon: ClipboardList,
+    section: "智能协作",
+    eyebrow: "Runs",
+    description: "查看任务事件、模型尝试以及待审批的状态补丁。"
+  },
+  {
+    to: "/settings",
+    label: "设置",
+    icon: Settings,
+    section: "系统",
+    eyebrow: "Local Settings",
+    description: "维护本地运行、上下文、记忆和技能等系统配置。"
+  }
 ];
 
 export const shellCopy = {
   brandEyebrow: "Local-first",
   brandName: "Ink Agent",
-  sidebarBadge: "MVP",
-  sidebarTitle: "本地优先创作系统",
-  sidebarDescription: "当前页面架构先跑通壳子，后续再接 Hono API、Agent 管线和本地文件状态。",
-  topbarEyebrow: "Workspace",
-  topbarTitle: "创作工作台",
-  statusPills: ["Local Session", "接口预留 · 前端优先"]
+  statusPills: ["Local Session", "本地优先 · 数据持久化"]
 } as const;

@@ -26,6 +26,7 @@ const emptyDraft: ModelConfigDraft = {
   purpose: "writing",
   enabled: true,
   isDefault: false,
+  capabilities: {},
   note: ""
 };
 

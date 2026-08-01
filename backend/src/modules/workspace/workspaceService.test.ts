@@ -22,6 +22,10 @@ describe("workspaceService", () => {
 
     await ensureWorkspace(paths);
 
+    await expect(pathExists(paths.configDir)).resolves.toBe(true);
+    await expect(pathExists(paths.skillsDir)).resolves.toBe(true);
+    await expect(pathExists(paths.backupsDir)).resolves.toBe(true);
+    await expect(pathExists(paths.logsDir)).resolves.toBe(true);
     await expect(pathExists(paths.booksIndexFile)).resolves.toBe(true);
     await expect(pathExists(paths.modelConfigsFile)).resolves.toBe(true);
     await expect(pathExists(paths.modelRoutesFile)).resolves.toBe(true);

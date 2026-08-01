@@ -70,7 +70,7 @@ export async function saveModelConfig(paths: WorkspacePaths, input: ModelConfigU
     purpose: input.purpose,
     enabled: input.enabled,
     isDefault: input.isDefault,
-    capabilities: existing?.capabilities ?? {},
+    capabilities: input.capabilities ?? existing?.capabilities ?? {},
     note: input.note,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now

@@ -84,7 +84,7 @@ export async function testPublicModelConnection(paths: WorkspacePaths, body: unk
     purpose: input.purpose,
     enabled: input.enabled,
     isDefault: input.isDefault,
-    capabilities: {},
+    capabilities: input.capabilities ?? {},
     note: input.note ?? "",
     createdAt: now,
     updatedAt: now

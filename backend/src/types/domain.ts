@@ -54,6 +54,7 @@ export interface BookRecord {
   narrationPerspective: string;
   channel: string;
   writingStyleId: string | null;
+  writingStyleVersionId: string | null;
   protagonistGender: string;
   protagonistName: string;
   plannedWords: number | null;
@@ -139,6 +140,7 @@ export interface AgentRunRecord {
   modelConfigId: string | null;
   promptVersion: string | null;
   tokenUsageJson: unknown | null;
+  styleTraceJson: unknown | null;
   errorMessage: string | null;
   startedAt: string;
   finishedAt: string | null;

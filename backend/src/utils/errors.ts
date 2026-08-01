@@ -1,3 +1,5 @@
+import { ZodError } from "zod";
+
 export class AppError extends Error {
   readonly code: number;
   readonly status: number;
@@ -21,6 +23,10 @@ export function toAppError(error: unknown): AppError {
     return error;
   }
 
+  if (error instanceof ZodError) {
+    return badRequest("请求参数校验失败", { issues: error.issues });
+  }
+
   if (error instanceof Error) {
     return new AppError(error.message);
   }
@@ -40,6 +46,14 @@ export function notFound(message: string, details?: unknown) {
   return new AppError(message, {
     code: 14040,
     status: 404,
+    details
+  });
+}
+
+export function conflict(message: string, details?: unknown) {
+  return new AppError(message, {
+    code: 14090,
+    status: 409,
     details
   });
 }

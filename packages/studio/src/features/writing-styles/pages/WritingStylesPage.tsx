@@ -2,13 +2,21 @@ import { useEffect, useState } from "react";
 import type { ChangeEvent } from "react";
 import { Badge } from "@/shared/components/ui/Badge";
 import { PageHeader } from "@/shared/components/ui/PageHeader";
-import { simulatedAnalysis } from "@/features/writing-styles/data/writingStyles";
-import type { AnalysisResult, StyleParameter, WritingStyle } from "@/features/writing-styles/data/writingStyles";
+import { AnalysisResultPanel } from "@/features/writing-styles/components/AnalysisResultPanel";
+import { StyleDetailView } from "@/features/writing-styles/components/StyleDetailView";
+import type { AnalysisResult, WritingStyle } from "@/features/writing-styles/data/writingStyles";
 import {
+  activateWritingStyleVersion,
+  addWritingStyleSample,
   analyzeWritingStyle,
   createWritingStyle,
-  listWritingStyles
+  deleteWritingStyleSample,
+  listWritingStyleSamples,
+  listWritingStyleVersions,
+  listWritingStyles,
+  rebuildWritingStyle
 } from "@/features/writing-styles/api/writingStylesApi";
+import type { WritingStyleSampleDto, WritingStyleVersionDto } from "@/features/writing-styles/api/writingStylesApi";
 
 type StyleView = "list" | "create" | "detail";
 
@@ -27,13 +35,16 @@ export function WritingStylesPage() {
   const [selectedId, setSelectedId] = useState("");
   const [styleName, setStyleName] = useState("");
   const [styleNote, setStyleNote] = useState("");
-  const [searchKeywords, setSearchKeywords] = useState("");
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [sampleContent, setSampleContent] = useState("");
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [feedback, setFeedback] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"analyze" | "save" | null>(null);
+  const [styleSamples, setStyleSamples] = useState<WritingStyleSampleDto[]>([]);
+  const [styleVersions, setStyleVersions] = useState<WritingStyleVersionDto[]>([]);
+  const [managingStyle, setManagingStyle] = useState(false);
 
   const selectedStyle = styles.find((style) => style.id === selectedId) ?? styles[0];
   const fileCount = styles.reduce((total, style) => total + style.sourceFiles.length, 0);
@@ -71,10 +82,29 @@ export function WritingStylesPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (view !== "detail" || !selectedStyle) return;
+    let ignore = false;
+    setManagingStyle(true);
+    void Promise.all([listWritingStyleSamples(selectedStyle.id), listWritingStyleVersions(selectedStyle.id)])
+      .then(([samples, versions]) => {
+        if (!ignore) {
+          setStyleSamples(samples);
+          setStyleVersions(versions);
+        }
+      })
+      .catch((error) => {
+        if (!ignore) setFeedback(`读取多样本风格资产失败：${toMessage(error)}`);
+      })
+      .finally(() => {
+        if (!ignore) setManagingStyle(false);
+      });
+    return () => { ignore = true; };
+  }, [view, selectedStyle?.id]);
+
   function openCreateView() {
     setStyleName("");
     setStyleNote("");
-    setSearchKeywords("");
     setSelectedFiles([]);
     setSampleContent("");
     setAnalysisResult(null);
@@ -104,46 +134,52 @@ export function WritingStylesPage() {
           setSampleContent(content);
         })
         .catch(() => {
-          setFeedback("模板文件读取失败，可改用网络搜索关键词或风格备注后再分析。");
+          setFeedback("模板文件读取失败，可改用风格名称和说明作为分析输入。");
         });
     }
   }
 
   async function analyzeStyle() {
-    const content = sampleContent || searchKeywords || styleNote || styleName;
+    const content = sampleContent || styleNote || styleName;
 
     if (!content.trim()) {
-      setFeedback("请先选择模板文件，或填写网络搜索关键词/风格备注后再执行 AI 分析。");
+      setFeedback("请先选择模板文件，或填写风格名称和说明后再执行 AI 分析。");
       return;
     }
 
     setSaving(true);
+    setPendingAction("analyze");
 
     try {
       const style = await analyzeWritingStyle({
         name: styleName.trim() || "AI 分析风格",
-        sampleFileName: selectedFiles[0] ?? "search-keywords.md",
+        sampleFileName: selectedFiles[0] ?? "manual-description.md",
         content
       });
       setAnalysisResult(style.analysis);
-      setFeedback("AI 分析已完成。请确认结果后点击“保存风格”，届时才会写入后端风格库。");
+      const generatedMeta = getGeneratedStyleMeta(style.analysis);
+      setStyleName(generatedMeta.name);
+      setStyleNote(generatedMeta.description);
+      setFeedback("AI 分析已完成，已自动生成并填入风格名称和风格说明。请确认后点击“保存风格”。");
     } catch (error) {
-      setAnalysisResult(simulatedAnalysis);
-      setFeedback(`AI 分析接口调用失败，已展示前端模拟结果：${toMessage(error)}`);
+      setAnalysisResult(null);
+      setFeedback(`AI 分析失败：${toMessage(error)}`);
     } finally {
       setSaving(false);
+      setPendingAction(null);
     }
   }
 
   async function saveStyle() {
     const trimmedName = styleName.trim();
-    const result = analysisResult ?? {
-      ...simulatedAnalysis,
-      summary: "该风格已保存为草稿，后续可补充模板作品并重新执行 AI 分析。",
-      parameters: []
-    };
+    if (!analysisResult) {
+      setFeedback("请先完成真实 AI 分析，再保存写作风格。");
+      return;
+    }
+    const result = analysisResult;
 
     setSaving(true);
+    setPendingAction("save");
 
     try {
       const savedStyle = await createWritingStyle({
@@ -152,9 +188,14 @@ export function WritingStylesPage() {
           styleNote.trim() ||
           result.summary ||
           "由模板作品分析生成的写作风格，可作为写作 Agent 的风格约束和审稿规则来源。",
-        parameters: Object.fromEntries(result.parameters.map((parameter) => [parameter.label, parameter.value])),
-        sampleFileName: selectedFiles[0] ?? null
+        parameters:
+          result.rawParameters ?? Object.fromEntries(result.parameters.map((parameter) => [parameter.label, parameter.value])),
+        sampleFileName: selectedFiles[0] ?? null,
+        analysis: result
       });
+      if (sampleContent.trim() && selectedFiles[0]) {
+        await addWritingStyleSample(savedStyle.id, { fileName: selectedFiles[0], content: sampleContent });
+      }
       const nextStyles = await listWritingStyles();
       setStyles(nextStyles);
       setSelectedId(savedStyle.id);
@@ -164,6 +205,7 @@ export function WritingStylesPage() {
       setFeedback(`风格保存失败：${toMessage(error)}`);
     } finally {
       setSaving(false);
+      setPendingAction(null);
     }
   }
 
@@ -173,12 +215,80 @@ export function WritingStylesPage() {
     setFeedback("提示词片段已复制到剪贴板。");
   }
 
+  async function addSampleFile(file: File) {
+    if (!selectedStyle) return;
+    setManagingStyle(true);
+    try {
+      await addWritingStyleSample(selectedStyle.id, { fileName: file.name, content: await file.text() });
+      const [samples, nextStyles] = await Promise.all([
+        listWritingStyleSamples(selectedStyle.id),
+        listWritingStyles()
+      ]);
+      setStyleSamples(samples);
+      setStyles(nextStyles);
+      setFeedback("样本已加入风格资产；重建后会生成新的不可变版本。");
+    } catch (error) {
+      setFeedback(`添加样本失败：${toMessage(error)}`);
+    } finally {
+      setManagingStyle(false);
+    }
+  }
+
+  async function removeSample(sampleId: string) {
+    if (!selectedStyle) return;
+    setManagingStyle(true);
+    try {
+      await deleteWritingStyleSample(selectedStyle.id, sampleId);
+      const [samples, nextStyles] = await Promise.all([
+        listWritingStyleSamples(selectedStyle.id),
+        listWritingStyles()
+      ]);
+      setStyleSamples(samples);
+      setStyles(nextStyles);
+      setFeedback("样本已从下一版本的聚合集合中移除。");
+    } catch (error) {
+      setFeedback(`删除样本失败：${toMessage(error)}`);
+    } finally {
+      setManagingStyle(false);
+    }
+  }
+
+  async function rebuildSelectedStyle() {
+    if (!selectedStyle) return;
+    setManagingStyle(true);
+    try {
+      await rebuildWritingStyle(selectedStyle.id);
+      const [nextStyles, versions] = await Promise.all([listWritingStyles(), listWritingStyleVersions(selectedStyle.id)]);
+      setStyles(nextStyles);
+      setStyleVersions(versions);
+      setFeedback("多样本聚合完成，新的不可变风格版本已生成。");
+    } catch (error) {
+      setFeedback(`重建风格失败：${toMessage(error)}`);
+    } finally {
+      setManagingStyle(false);
+    }
+  }
+
+  async function activateVersion(versionId: string) {
+    if (!selectedStyle) return;
+    setManagingStyle(true);
+    try {
+      await activateWritingStyleVersion(selectedStyle.id, versionId);
+      setStyles(await listWritingStyles());
+      setFeedback("已激活选定风格版本；已有作品仍保持其固定版本。");
+    } catch (error) {
+      setFeedback(`激活版本失败：${toMessage(error)}`);
+    } finally {
+      setManagingStyle(false);
+    }
+  }
+
   return (
     <div className="page style-page">
       <PageHeader
         eyebrow="Writing Style"
         title="写作风格"
-        description="沉淀你自己的文风模板：用本地文件和网络搜索线索收集样章，执行 AI 分析后生成风格摘要、节奏规则和去 AI 味约束。"
+        description="沉淀你自己的文风模板：用本地文本样本执行 AI 分析，生成风格摘要、节奏规则和去 AI 味约束。"
         actions={
           view === "list" ? (
             <button className="primary-button" type="button" onClick={openCreateView}>
@@ -220,25 +330,61 @@ export function WritingStylesPage() {
         {view === "create" ? (
           <StyleCreateView
             analysisResult={analysisResult}
-            searchKeywords={searchKeywords}
+            analyzing={pendingAction === "analyze"}
             selectedFiles={selectedFiles}
+            saving={pendingAction === "save"}
             styleName={styleName}
             styleNote={styleNote}
             onAnalyze={analyzeStyle}
             onFileChange={handleFileChange}
             onSave={saveStyle}
-            onSearchKeywordsChange={setSearchKeywords}
             onStyleNameChange={setStyleName}
             onStyleNoteChange={setStyleNote}
           />
         ) : null}
 
         {view === "detail" && selectedStyle ? (
-          <StyleDetailView style={selectedStyle} onCopyPrompt={copyPromptSnippet} />
+          <StyleDetailView
+            style={selectedStyle}
+            samples={styleSamples}
+            versions={styleVersions}
+            managing={managingStyle}
+            onAddSample={addSampleFile}
+            onRemoveSample={removeSample}
+            onRebuild={rebuildSelectedStyle}
+            onActivateVersion={activateVersion}
+            onCopyPrompt={copyPromptSnippet}
+          />
         ) : null}
       </div>
     </div>
   );
+}
+
+function getGeneratedStyleMeta(analysis: AnalysisResult) {
+  const rawAnalysis = analysis.rawAnalysis;
+
+  if (typeof rawAnalysis === "object" && rawAnalysis !== null && "dominantStyle" in rawAnalysis) {
+    const dominantStyle = rawAnalysis.dominantStyle;
+
+    if (typeof dominantStyle === "object" && dominantStyle !== null) {
+      const name = "name" in dominantStyle && typeof dominantStyle.name === "string" ? dominantStyle.name.trim() : "";
+      const description =
+        "description" in dominantStyle && typeof dominantStyle.description === "string"
+          ? dominantStyle.description.trim()
+          : "";
+
+      if (name) {
+        return { name, description: description || analysis.summary };
+      }
+    }
+  }
+
+  const primaryFeature = analysis.parameters.find((parameter) => parameter.value.trim())?.value.trim();
+  return {
+    name: primaryFeature || "AI 分析风格",
+    description: analysis.summary
+  };
 }
 
 interface StyleListViewProps {
@@ -305,7 +451,7 @@ function StyleListView({ styles, selectedId, onOpenDetail }: StyleListViewProps)
 
             <div className="style-card-foot">
               <span>{style.sourceFiles.length} 个模板文件</span>
-              <span>{style.searchKeywords}</span>
+              <span>最近分析 {style.lastAnalyzed}</span>
             </div>
           </button>
         ))}
@@ -316,34 +462,33 @@ function StyleListView({ styles, selectedId, onOpenDetail }: StyleListViewProps)
 
 interface StyleCreateViewProps {
   analysisResult: AnalysisResult | null;
-  searchKeywords: string;
+  analyzing: boolean;
   selectedFiles: string[];
+  saving: boolean;
   styleName: string;
   styleNote: string;
   onAnalyze: () => void;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
   onSave: () => void;
-  onSearchKeywordsChange: (value: string) => void;
   onStyleNameChange: (value: string) => void;
   onStyleNoteChange: (value: string) => void;
 }
 
 function StyleCreateView({
   analysisResult,
-  searchKeywords,
+  analyzing,
   selectedFiles,
+  saving,
   styleName,
   styleNote,
   onAnalyze,
   onFileChange,
   onSave,
-  onSearchKeywordsChange,
   onStyleNameChange,
   onStyleNoteChange
 }: StyleCreateViewProps) {
   const canAnalyze =
     selectedFiles.length > 0 ||
-    searchKeywords.trim().length > 0 ||
     styleName.trim().length > 0 ||
     styleNote.trim().length > 0;
 
@@ -354,7 +499,7 @@ function StyleCreateView({
           <div>
             <p className="eyebrow">New Style</p>
             <h3>新增风格页面</h3>
-            <p className="muted">通过本地模板作品和网络搜索线索收集样本，再交给 AI 分析生成风格结果。</p>
+            <p className="muted">通过本地文本模板收集样本，再交给 AI 分析生成风格结果。</p>
           </div>
         </div>
 
@@ -382,46 +527,45 @@ function StyleCreateView({
             <div className="source-intake">
               <label className="source-upload-card">
                 <input
-                  accept=".txt,.md,.doc,.docx,.pdf"
+                  accept=".txt,.md"
                   className="native-file-input"
-                  multiple
                   type="file"
                   onChange={onFileChange}
                 />
-                <span className="source-upload-icon">DOC</span>
+                <span className="source-upload-icon">TXT</span>
                 <strong>选择本地模板作品</strong>
-                <p>点击导入 txt、md、doc、docx、pdf。当前会读取首个文本类文件内容用于后端分析预览。</p>
-              </label>
-
-              <label className="source-search-card">
-                <span className="source-upload-icon">WEB</span>
-                <strong>网络搜索线索</strong>
-                <p>预留给后续网络搜索/链接采集能力，当前仅做页面输入。</p>
-                <input
-                  value={searchKeywords}
-                  placeholder="输入作品关键词、作者名或参考链接"
-                  onChange={(event) => onSearchKeywordsChange(event.target.value)}
-                />
+                <p>导入 TXT 或 Markdown 文本，内容会提交给后端分析并可保存为风格样本。</p>
               </label>
             </div>
           </div>
 
           <div className="selected-source-strip">
-            {selectedFiles.length === 0 && searchKeywords.trim().length === 0 ? (
-              <span className="empty-list">尚未添加模板来源。请选择本地文件，或填写网络搜索线索。</span>
+            {selectedFiles.length === 0 ? (
+              <span className="empty-list">尚未添加模板来源。请选择本地 TXT 或 Markdown 文件。</span>
             ) : null}
             {selectedFiles.map((fileName) => (
               <span key={fileName}>{fileName}</span>
             ))}
-            {searchKeywords.trim() ? <span>搜索：{searchKeywords.trim()}</span> : null}
           </div>
 
           <div className="button-row">
-            <button className="ghost-button" type="button" disabled={!canAnalyze} onClick={onAnalyze}>
-              AI分析
+            <button
+              className="ghost-button"
+              type="button"
+              data-loading={analyzing ? "true" : undefined}
+              disabled={!canAnalyze || analyzing || saving}
+              onClick={onAnalyze}
+            >
+              {analyzing ? "AI分析中..." : "AI分析"}
             </button>
-            <button className="primary-button" type="button" onClick={onSave}>
-              保存风格
+            <button
+              className="primary-button"
+              type="button"
+              data-loading={saving ? "true" : undefined}
+              disabled={analyzing || saving}
+              onClick={onSave}
+            >
+              {saving ? "保存中..." : "保存风格"}
             </button>
           </div>
         </form>
@@ -429,192 +573,6 @@ function StyleCreateView({
 
       <AnalysisResultPanel result={analysisResult} />
     </section>
-  );
-}
-
-interface AnalysisResultPanelProps {
-  result: AnalysisResult | null;
-}
-
-function AnalysisResultPanel({ result }: AnalysisResultPanelProps) {
-  return (
-    <aside className="style-analysis-panel analysis-result-panel">
-      <div className="section-title">
-        <div>
-          <p className="eyebrow">AI Result</p>
-          <h3>AI 分析结果</h3>
-          <p className="muted">点击“AI分析”后，这里展示后端分析预览；点击“保存风格”后才写入本地风格库。</p>
-        </div>
-        <Badge tone={result ? "sage" : "amber"}>{result ? "已分析" : "等待分析"}</Badge>
-      </div>
-
-      {result ? (
-        <div className="analysis-result-content">
-          <div className="analysis-summary">
-            <span>分析摘要</span>
-            <p>{result.summary}</p>
-          </div>
-
-          <div className="analysis-result-list">
-            <ResultRow label="声音画像" value={result.voiceProfile} />
-            <ResultRow label="结构规则" value={result.structureRule} />
-            <ResultRow label="去 AI 味" value={result.aiReductionRule} />
-          </div>
-
-          <div className="prompt-preview">
-            <span>可复用提示词</span>
-            <p>{result.promptSnippet}</p>
-          </div>
-        </div>
-      ) : (
-        <div className="analysis-empty-state">
-          <span className="analysis-orb" />
-          <strong>等待 AI 分析</strong>
-          <p>添加模板来源后点击“AI分析”。这里不会再提前展示参数卡片，只展示分析完成后的结果。</p>
-        </div>
-      )}
-    </aside>
-  );
-}
-
-interface ResultRowProps {
-  label: string;
-  value: string;
-}
-
-function ResultRow({ label, value }: ResultRowProps) {
-  return (
-    <article className="analysis-result-item">
-      <span>{label}</span>
-      <p>{value}</p>
-    </article>
-  );
-}
-
-interface StyleDetailViewProps {
-  style: WritingStyle;
-  onCopyPrompt: (snippet: string) => void;
-}
-
-function StyleDetailView({ style, onCopyPrompt }: StyleDetailViewProps) {
-  return (
-    <section className="style-detail-layout">
-      <article className="style-detail-hero">
-        <div className="style-card-head">
-          <div>
-            <p className="eyebrow">Style Detail</p>
-            <h3>{style.name}</h3>
-            <p className="muted">{style.summary}</p>
-          </div>
-          <Badge tone="blue">{style.lastAnalyzed}</Badge>
-        </div>
-
-        <div className="style-chip-row">
-          {style.tags.map((tag) => (
-            <Badge key={tag} tone="blue">
-              {tag}
-            </Badge>
-          ))}
-        </div>
-
-        <div className="style-metric-grid">
-          <span>
-            <em>语气</em>
-            {style.metrics.tone}
-          </span>
-          <span>
-            <em>节奏</em>
-            {style.metrics.rhythm}
-          </span>
-          <span>
-            <em>叙事视角</em>
-            {style.metrics.pointOfView}
-          </span>
-          <span>
-            <em>去 AI 味</em>
-            {style.metrics.aiReduction}
-          </span>
-        </div>
-
-        <div className="prompt-preview">
-          <span>参考提示词片段</span>
-          <p>{style.analysis.promptSnippet}</p>
-        </div>
-
-        <div className="button-row">
-          <button className="ghost-button" type="button" onClick={() => onCopyPrompt(style.analysis.promptSnippet)}>
-            复制提示词片段
-          </button>
-          <button className="ghost-button" type="button" disabled>
-            编辑参数（预留）
-          </button>
-        </div>
-      </article>
-
-      <aside className="style-side-panel">
-        <div className="section-title">
-          <div>
-            <p className="eyebrow">Source Files</p>
-            <h3>模板来源</h3>
-          </div>
-        </div>
-        <div className="source-file-list">
-          {style.sourceFiles.map((fileName) => (
-            <span key={fileName}>{fileName}</span>
-          ))}
-          <span>搜索：{style.searchKeywords}</span>
-        </div>
-        <p className="muted">最近分析：{style.lastAnalyzed}</p>
-      </aside>
-
-      <div className="style-analysis-panel full">
-        <div className="section-title">
-          <div>
-            <p className="eyebrow">Analysis</p>
-            <h3>风格分析结果</h3>
-            <p className="muted">这些结果后续会传给写作模型、审稿模型和去 AI 味规则链路。</p>
-          </div>
-        </div>
-
-        <div className="analysis-result-content">
-          <div className="analysis-summary">
-            <span>分析摘要</span>
-            <p>{style.analysis.summary}</p>
-          </div>
-          <div className="analysis-result-list">
-            <ResultRow label="声音画像" value={style.analysis.voiceProfile} />
-            <ResultRow label="结构规则" value={style.analysis.structureRule} />
-            <ResultRow label="去 AI 味" value={style.analysis.aiReductionRule} />
-          </div>
-          <div className="style-insight-grid">
-            {style.analysis.parameters.length > 0 ? (
-              style.analysis.parameters.map((parameter) => <InsightMeter key={parameter.label} parameter={parameter} />)
-            ) : (
-              <div className="empty-list">该风格还没有生成参数，请在新增页面添加模板来源并执行 AI 分析。</div>
-            )}
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-interface InsightMeterProps {
-  parameter: StyleParameter;
-}
-
-function InsightMeter({ parameter }: InsightMeterProps) {
-  return (
-    <article className="style-insight-item">
-      <div>
-        <span>{parameter.label}</span>
-        <strong>{parameter.value}</strong>
-        <p>{parameter.description}</p>
-      </div>
-      <div className="parameter-meter" aria-label={`${parameter.label} 置信度 ${parameter.score}%`}>
-        <span style={{ width: `${parameter.score}%` }} />
-      </div>
-    </article>
   );
 }
 

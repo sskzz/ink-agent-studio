@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { agentRunRecordSchema } from "../../schemas/runSchemas.js";
 import type { AgentRunRecord } from "../../types/domain.js";
-import { appendLine, readTextFile, writeTextFileAtomic, pathExists } from "../../utils/fileStore.js";
+import { appendLine, ensureDirectory, readTextFile, writeTextFileAtomic, pathExists } from "../../utils/fileStore.js";
 import { notFound } from "../../utils/errors.js";
 import { readJsonFile } from "../../utils/jsonStore.js";
 import { resolveInsideRoot } from "../../utils/safePath.js";
@@ -22,6 +23,7 @@ export function createRunRecord(input: {
   inputJson: unknown;
   modelConfigId?: string | null;
   promptVersion?: string | null;
+  styleTraceJson?: unknown | null;
 }): AgentRunRecord {
   const now = new Date().toISOString();
 
@@ -29,15 +31,16 @@ export function createRunRecord(input: {
     id: randomUUID(),
     bookId: input.bookId ?? null,
     runType: input.runType,
-    status: "completed",
+    status: "running",
     inputJson: input.inputJson,
     outputJson: null,
     modelConfigId: input.modelConfigId ?? null,
     promptVersion: input.promptVersion ?? null,
     tokenUsageJson: null,
+    styleTraceJson: input.styleTraceJson ?? null,
     errorMessage: null,
     startedAt: now,
-    finishedAt: now
+    finishedAt: null
   };
 }
 
@@ -46,20 +49,45 @@ export function createRunRecord(input: {
  * 每个 run 都有独立 JSON 文件，同时追加到 runs.jsonl，便于问题追踪和后续恢复。
  */
 export async function saveRun(workspacePaths: WorkspacePaths, run: AgentRunRecord) {
-  await writeTextFileAtomic(getRunPath(workspacePaths, run), `${JSON.stringify(run, null, 2)}\n`);
+  const runPath = getRunPath(workspacePaths, run);
+  await ensureDirectory(path.dirname(runPath));
+  await writeTextFileAtomic(runPath, `${JSON.stringify(run, null, 2)}\n`);
   await appendLine(workspacePaths.runsLogFile, JSON.stringify(run));
   return run;
 }
 
-export async function completeRun(workspacePaths: WorkspacePaths, run: AgentRunRecord, outputJson: unknown) {
+export async function completeRun(
+  workspacePaths: WorkspacePaths,
+  run: AgentRunRecord,
+  outputJson: unknown,
+  options: { tokenUsageJson?: unknown; styleTraceJson?: unknown } = {}
+) {
   const completed: AgentRunRecord = {
     ...run,
     status: "completed",
     outputJson,
+    tokenUsageJson: options.tokenUsageJson ?? run.tokenUsageJson,
+    styleTraceJson: options.styleTraceJson ?? run.styleTraceJson,
     finishedAt: new Date().toISOString()
   };
 
   return saveRun(workspacePaths, completed);
+}
+
+export async function failRun(
+  workspacePaths: WorkspacePaths,
+  run: AgentRunRecord,
+  error: unknown,
+  options: { tokenUsageJson?: unknown; styleTraceJson?: unknown } = {}
+) {
+  return saveRun(workspacePaths, {
+    ...run,
+    status: "failed",
+    errorMessage: error instanceof Error ? error.message : String(error),
+    tokenUsageJson: options.tokenUsageJson ?? run.tokenUsageJson,
+    styleTraceJson: options.styleTraceJson ?? run.styleTraceJson,
+    finishedAt: new Date().toISOString()
+  });
 }
 
 export async function getRun(workspacePaths: WorkspacePaths, runId: string, bookId?: string | null) {
@@ -78,6 +106,7 @@ export async function getRun(workspacePaths: WorkspacePaths, runId: string, book
   if (logExists) {
     const lines = (await readTextFile(workspacePaths.runsLogFile)).split(/\r?\n/).filter(Boolean);
     const found = lines
+      .reverse()
       .map((line) => agentRunRecordSchema.safeParse(JSON.parse(line)))
       .find((result) => result.success && result.data.id === runId);
 

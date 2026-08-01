@@ -29,6 +29,26 @@ export const modelProviderSchema = z.enum([
 
 export const modelPurposeSchema = z.enum(["planning", "writing", "review", "embedding", "image"]);
 
+const modelPricingSchema = z.object({
+  currency: z.string().trim().regex(/^[A-Z]{3}$/, "币种必须是三位大写 ISO 4217 代码"),
+  promptMicrosPerMillionTokens: z.number().int().nonnegative(),
+  completionMicrosPerMillionTokens: z.number().int().nonnegative()
+}).strict();
+
+export const modelCapabilitiesSchema = z.record(z.unknown()).superRefine((value, context) => {
+  if (value.pricing === undefined) return;
+  const pricing = modelPricingSchema.safeParse(value.pricing);
+  if (!pricing.success) {
+    for (const issue of pricing.error.issues) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["pricing", ...issue.path],
+        message: issue.message
+      });
+    }
+  }
+});
+
 function withApiModelAlias(value: unknown) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return value;
@@ -50,7 +70,7 @@ const modelConfigRecordFieldsSchema = z.object({
   purpose: modelPurposeSchema,
   enabled: z.boolean(),
   isDefault: z.boolean(),
-  capabilities: z.record(z.unknown()),
+  capabilities: modelCapabilitiesSchema,
   note: z.string(),
   createdAt: z.string(),
   updatedAt: z.string()
@@ -75,6 +95,7 @@ const modelConfigUpsertFieldsSchema = z.object({
   purpose: modelPurposeSchema,
   enabled: z.boolean().default(true),
   isDefault: z.boolean().default(false),
+  capabilities: modelCapabilitiesSchema.optional(),
   note: z.string().optional().default("")
 });
 type ModelConfigUpsertOutput = z.infer<typeof modelConfigUpsertFieldsSchema>;

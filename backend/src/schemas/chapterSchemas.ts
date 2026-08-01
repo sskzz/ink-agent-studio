@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sceneTypeSchema } from "./styleVersionSchemas.js";
 
 export const chapterRecordSchema = z.object({
   id: z.string(),
@@ -35,5 +36,7 @@ export const chapterUpdateInputSchema = z.object({
 
 export const chapterAiTaskInputSchema = z.object({
   instruction: z.string().optional().default(""),
-  selectedContextFileIds: z.array(z.string()).optional().default([])
+  selectedContextFileIds: z.array(z.string()).optional().default([]),
+  sceneType: z.union([sceneTypeSchema, z.literal("auto")]).optional().default("auto"),
+  allowDegradedStyle: z.boolean().optional().default(false)
 });

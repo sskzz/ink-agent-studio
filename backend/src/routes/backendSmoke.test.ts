@@ -28,7 +28,7 @@ afterEach(async () => {
 });
 
 describe("backend routes smoke", () => {
-  it("覆盖文件、实体、章节、AI 占位和写作风格接口", async () => {
+  it("覆盖文件、实体、章节、AI 初始化入口和写作风格接口", async () => {
     const app = createApp();
     let response = await app.request("/api/v1/model-configs", {
       method: "OPTIONS",
@@ -93,14 +93,14 @@ describe("backend routes smoke", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ instruction: "Continue one paragraph." })
     });
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(400);
 
     response = await app.request(`/api/v1/books/${bookId}/initialize`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: "{}"
     });
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(503);
 
     response = await app.request("/api/v1/writing-styles");
     const stylesBeforeAnalyze = (await response.json()) as ApiPayload<Array<{ id: string }>>;

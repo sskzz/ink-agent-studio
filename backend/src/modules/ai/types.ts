@@ -8,10 +8,38 @@ export interface ModelTestResult {
   details?: unknown;
 }
 
+export interface ModelGenerateTextInput {
+  systemPrompt: string;
+  userPrompt: string;
+  temperature?: number;
+  maxTokens?: number;
+  responseFormat?: "json_object" | "text";
+  stream?: boolean;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+export interface ModelGenerateTextResult {
+  text: string;
+  provider: ModelProvider;
+  model: string;
+  raw?: unknown;
+  tokenUsage?: {
+    promptTokens: number | null;
+    completionTokens: number | null;
+    totalTokens: number | null;
+  };
+}
+
 export interface ModelProviderAdapter {
   providerType: ModelProvider;
   test(config: ModelConfigRecord, apiKey: string): Promise<ModelTestResult>;
   listModels(config: ModelConfigRecord, apiKey: string): Promise<string[]>;
+  generateText?(
+    config: ModelConfigRecord,
+    apiKey: string,
+    input: ModelGenerateTextInput
+  ): Promise<ModelGenerateTextResult>;
 }
 
 export function modelTestResult(

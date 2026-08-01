@@ -2,6 +2,8 @@ import { z } from "zod";
 import { ensureDirectory, pathExists, writeTextFileAtomic } from "../../utils/fileStore.js";
 import { readJsonFile, writeJsonFile } from "../../utils/jsonStore.js";
 import type { WorkspacePaths } from "./workspacePaths.js";
+import { migrateWritingStyleStorage } from "../styles/writingStyleMigration.js";
+import { SkillRepository } from "../skills/skillRepository.js";
 
 const emptyArraySchema = z.array(z.unknown());
 const modelRoutesSchema = z.object({
@@ -23,9 +25,14 @@ const defaultRoutes = {
  */
 export async function ensureWorkspace(paths: WorkspacePaths) {
   await Promise.all([
+    ensureDirectory(paths.configDir),
     ensureDirectory(paths.indexDir),
     ensureDirectory(paths.secretsDir),
-    ensureDirectory(paths.booksDir)
+    ensureDirectory(paths.booksDir),
+    ensureDirectory(paths.stylesDir),
+    ensureDirectory(paths.skillsDir),
+    ensureDirectory(paths.backupsDir),
+    ensureDirectory(paths.logsDir)
   ]);
 
   await Promise.all([
@@ -39,6 +46,9 @@ export async function ensureWorkspace(paths: WorkspacePaths) {
   if (!(await pathExists(paths.runsLogFile))) {
     await writeTextFileAtomic(paths.runsLogFile, "");
   }
+
+  await migrateWritingStyleStorage(paths);
+  await new SkillRepository(paths).ensureInstalled();
 }
 
 export async function getWorkspaceSummary(paths: WorkspacePaths) {

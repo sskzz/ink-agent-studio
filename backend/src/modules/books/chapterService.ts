@@ -6,14 +6,34 @@ import {
   chapterUpdateInputSchema
 } from "../../schemas/chapterSchemas.js";
 import type { ChapterRecord } from "../../types/domain.js";
-import { notFound } from "../../utils/errors.js";
+import { badRequest, notFound } from "../../utils/errors.js";
 import { readTextFile, writeTextFileAtomic } from "../../utils/fileStore.js";
 import { readJsonFile, writeJsonFile } from "../../utils/jsonStore.js";
 import { resolveInsideRoot } from "../../utils/safePath.js";
-import { completeRun, createRunRecord } from "../agents/runRepository.js";
+import { executeAgentRun } from "../agents/agentRunExecutor.js";
+import { generateModelText } from "../ai/modelGateway.js";
+import { getModelConfig, getModelRoutes } from "../models/modelConfigRepository.js";
+import {
+  buildStyleRevisionInstruction,
+  evaluateCompiledStyleCompliance,
+  evaluateWritingStyleCompliance
+} from "../styles/writingStyleCompliance.js";
+import { resolveWritingStyleRuntimeContext } from "../styles/writingStyleRuntimeContext.js";
+import { reviewNovelWritingPolicy } from "../review/semanticStyleReviewer.js";
+import { buildCombinedRevisionInstruction, combineStyleReviews } from "../review/styleReviewAggregator.js";
+import { evaluateAntiAiCompliance } from "../review/antiAi/antiAiLocalReviewer.js";
 import type { WorkspacePaths } from "../workspace/workspacePaths.js";
 import { createBookPaths } from "./bookPaths.js";
 import { getBook, saveBook } from "./bookRepository.js";
+import { loadChapterFactContext } from "../agents/chapterGenerationContext.js";
+import { collectDegradationReasons } from "../agents/degradationPolicy.js";
+import { createConstraintResolutionTrace } from "../constraints/constraintResolver.js";
+import { ConfigRepository } from "../../config/configRepository.js";
+import { PromptAssembler } from "../prompts/promptAssembler.js";
+import { SkillRepository } from "../skills/skillRepository.js";
+import { SkillService } from "../skills/skillService.js";
+import { selectPromptMemory } from "../memory/promptMemory.js";
+import { userMemoryPromptSourceLabel } from "../memory/memoryPromptPolicy.js";
 
 function countWords(content: string) {
   return content.replace(/\s+/g, "").length;
@@ -112,18 +132,422 @@ export async function updateChapter(workspacePaths: WorkspacePaths, bookId: stri
 
 export async function continueChapter(workspacePaths: WorkspacePaths, bookId: string, chapterId: string, body: unknown) {
   const input = chapterAiTaskInputSchema.parse(body);
+  const book = await getBook(workspacePaths, bookId);
   const chapter = await getChapter(workspacePaths, bookId, chapterId);
-  const run = createRunRecord({
-    bookId,
-    runType: "continue_writing",
-    inputJson: { chapterId, ...input }
+  const factContext = await loadChapterFactContext(workspacePaths, bookId);
+  const appConfig = await new ConfigRepository(workspacePaths).readOrCreate();
+  const writingModel = await getRoutedWritingModel(workspacePaths);
+  return executeAgentRun<Record<string, unknown>>(
+    workspacePaths,
+    {
+      bookId,
+      runType: "continue_writing",
+      inputJson: {
+        chapterId,
+        ...input,
+        writingStyle: book.writingStyleId
+          ? { styleId: book.writingStyleId, preferredVersionId: book.writingStyleVersionId }
+          : null
+      },
+      modelConfigId: writingModel?.id ?? null,
+      promptVersion: "chapter.write.v3.layered"
+    },
+    async (runContext) => {
+  runContext.setStage("classify_scene");
+  const runtime = await resolveWritingStyleRuntimeContext(workspacePaths, {
+    book,
+    outline: chapter.outline,
+    instruction: input.instruction,
+    requestedSceneType: input.sceneType,
+    allowDegradedStyle: input.allowDegradedStyle,
+    factualConstraints: [
+      { id: "world-facts", source: "world", text: factContext.world.slice(-4500), sourceRef: { fileId: "world" } },
+      { id: "current-character-state", source: "character", text: factContext.currentState.slice(-3500), sourceRef: { fileId: "current-state" } }
+    ]
   });
-  const draft = `${chapter.content.trim()}\n\n${input.instruction || "继续推进当前章节。"}\n\n夜色在场景边缘慢慢压低，人物没有急着解释真相，只先做出一个能推动下一幕的小动作。`;
-  return completeRun(workspacePaths, run, {
+  const { style, version: styleVersion, versionResolution, scene, adjustment: sceneAdjustment, antiAiPolicy, compiledV2, generationPrompt, reviewPrompt } = runtime;
+  if (scene.tokenUsage) runContext.addTokenUsage("sceneClassification", scene.tokenUsage);
+
+  if (!writingModel) {
+    throw badRequest("尚未配置可用的写作模型，无法生成真实章节草稿", {
+      writingStyleId: style?.id ?? null
+    });
+  }
+
+  runContext.setStage("generate");
+  const skillSelection = await new SkillService(new SkillRepository(workspacePaths)).select({
+    operation: "writing",
+    instruction: input.instruction || "自然续写章节正文",
+    context: `${chapter.title}\n${chapter.outline}`,
+    requestedSkillIds: ["continuation-writing", ...(style ? ["style-replication"] : [])]
+  }, appConfig);
+  const memorySelection = await selectPromptMemory(workspacePaths, appConfig);
+  const assembledPrompt = assembleChapterPrompt({
+    bookTitle: book.title,
+    genre: book.genre,
+    narrationPerspective: book.narrationPerspective,
+    targetWords: book.chapterWords,
+    chapterTitle: chapter.title,
+    chapterOutline: chapter.outline,
+    currentContent: chapter.content,
+    instruction: input.instruction,
+    factContext,
+    policyPrompt: generationPrompt,
+    memoryPrompt: memorySelection.prompt,
+    memoryBudgetTokens: appConfig.memory.promptTokenBudget,
+    skillPrompt: skillSelection.prompt,
+    budgets: appConfig.context.budgets
+  });
+  runContext.mergeTrace({ prompt: assembledPrompt.trace, memory: memorySelection.trace, skills: skillSelection.trace });
+  const result = await generateModelText(workspacePaths, writingModel, {
+    systemPrompt: assembledPrompt.systemPrompt,
+    userPrompt: assembledPrompt.userPrompt,
+    temperature: 0.7,
+    maxTokens: calculateChapterMaxTokens(book.chapterWords),
+    responseFormat: "text",
+    timeoutMs: 90000
+  });
+  runContext.addTokenUsage("writing", result.tokenUsage ?? null);
+
+  runContext.setStage("local_review");
+  const featureProfile = style?.featureProfile;
+  const compiledTargets = compiledV2?.targetMetrics;
+  const initialCompliance = compiledTargets && styleVersion
+    ? evaluateCompiledStyleCompliance(result.text, compiledTargets, styleVersion.aggregateProfile.totalContentLength)
+    : featureProfile
+      ? evaluateWritingStyleCompliance(result.text, featureProfile)
+      : null;
+  const initialAntiAi = evaluateAntiAiCompliance(result.text, antiAiPolicy);
+  const shouldRunSemanticReview = Boolean(styleVersion && compiledV2)
+    || !initialAntiAi.passed
+    || Boolean(initialCompliance && !initialCompliance.passed);
+  const initialSemantic = shouldRunSemanticReview
+    ? await (async () => {
+        runContext.setStage("semantic_review");
+        return reviewNovelWritingPolicy(workspacePaths, {
+          version: styleVersion,
+          content: result.text,
+          reviewPrompt,
+          chapterContext: `${chapter.title}；${chapter.outline || input.instruction}`,
+          memoryPrompt: memorySelection.prompt,
+          promptBudgets: createReviewPromptBudgets(appConfig)
+        });
+      })()
+    : { review: null, degradedReason: null, modelConfigId: null, tokenUsage: [] };
+  runContext.addTokenUsage("semanticReviewInitial", initialSemantic.tokenUsage);
+  const initialCombinedReview = combineStyleReviews({
+    local: initialCompliance,
+    antiAi: initialAntiAi,
+    semantic: initialSemantic.review,
+    semanticDegradedReason: initialSemantic.degradedReason,
+    stableMultiSample: (styleVersion?.aggregateProfile.validSampleCount ?? 0) >= 3,
+    invariantRuleIds: styleVersion?.constraintPolicy.invariantRuleIds
+  });
+  let finalDraft = result.text;
+  let finalCompliance = initialCompliance;
+  let finalAntiAi = initialAntiAi;
+  let finalCombinedReview = initialCombinedReview;
+  let revisionCount = 0;
+  let revisionTokenUsage = null;
+  let finalSemanticTokenUsage = initialSemantic.tokenUsage;
+  let revisionFailure: string | null = null;
+  const revisionInstruction = buildCombinedRevisionInstruction(initialCombinedReview)
+    || (initialCompliance ? buildStyleRevisionInstruction(initialCompliance) : "");
+
+  if (generationPrompt && !initialCombinedReview.passed && revisionInstruction) {
+    try {
+    runContext.setStage("revise");
+    const revisionPrompt = assembleStyleRevisionPrompt({
+      policyPrompt: generationPrompt,
+      memoryPrompt: memorySelection.prompt,
+      skillPrompt: skillSelection.prompt,
+      revisionInstruction,
+      draft: result.text,
+      config: appConfig
+    });
+    runContext.mergeTrace({ revisionPrompt: revisionPrompt.trace });
+    const revision = await generateModelText(workspacePaths, writingModel, {
+      systemPrompt: revisionPrompt.systemPrompt,
+      userPrompt: revisionPrompt.userPrompt,
+      temperature: 0.35,
+      maxTokens: calculateChapterMaxTokens(book.chapterWords),
+      responseFormat: "text",
+      timeoutMs: 90000
+    });
+    finalDraft = revision.text;
+    revisionTokenUsage = revision.tokenUsage ?? null;
+    runContext.addTokenUsage("revision", revisionTokenUsage);
+    finalCompliance = compiledTargets && styleVersion
+      ? evaluateCompiledStyleCompliance(finalDraft, compiledTargets, styleVersion.aggregateProfile.totalContentLength)
+      : featureProfile
+        ? evaluateWritingStyleCompliance(finalDraft, featureProfile)
+        : null;
+    finalAntiAi = evaluateAntiAiCompliance(finalDraft, antiAiPolicy);
+    runContext.setStage("final_review");
+    const finalSemantic = await reviewNovelWritingPolicy(workspacePaths, {
+      version: styleVersion,
+      content: finalDraft,
+      reviewPrompt,
+      chapterContext: `${chapter.title}；${chapter.outline || input.instruction}`,
+      memoryPrompt: memorySelection.prompt,
+      promptBudgets: createReviewPromptBudgets(appConfig)
+    });
+    finalSemanticTokenUsage = finalSemantic.tokenUsage;
+    runContext.addTokenUsage("semanticReviewFinal", finalSemanticTokenUsage);
+    finalCombinedReview = combineStyleReviews({
+      local: finalCompliance,
+      antiAi: finalAntiAi,
+      semantic: finalSemantic.review,
+      semanticDegradedReason: finalSemantic.degradedReason,
+      stableMultiSample: (styleVersion?.aggregateProfile.validSampleCount ?? 0) >= 3,
+      invariantRuleIds: styleVersion?.constraintPolicy.invariantRuleIds
+    });
+    revisionCount = 1;
+    } catch (error) {
+      revisionFailure = `自动修订失败，已保留初始草稿：${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  const degradationReasons = collectDegradationReasons({
+    versionFallback: versionResolution.degradedReason,
+    validSampleCount: styleVersion?.aggregateProfile.validSampleCount,
+    sceneSource: scene.source,
+    semanticReviewFailure: finalCombinedReview.degradedReasons[0]
+  });
+  if (revisionFailure) {
+    degradationReasons.push({ code: "REVISION_FAILED", message: revisionFailure, recoverable: true });
+  }
+
+  return {
+    output: {
     chapterId,
-    draft,
-    note: "当前为确定性草稿，后续接入真实写作模型。"
-  });
+    draft: finalDraft,
+    writingStyle: style
+      ? { styleId: style.id, styleName: style.name, styleVersionId: styleVersion?.id ?? null, styleHash: styleVersion?.styleHash ?? null, constraintHash: compiledV2?.constraintHash ?? null }
+      : null,
+    scene: { classification: scene, adjustment: sceneAdjustment },
+    constraintResolution: compiledV2 ? createConstraintResolutionTrace(compiledV2.resolution) : null,
+    antiAiPolicy: {
+      ruleSetVersion: antiAiPolicy.ruleSetVersion,
+      constraintHash: antiAiPolicy.constraintHash,
+      effectiveRuleIds: antiAiPolicy.effectiveRules.map((rule) => rule.id),
+      deduplicatedCount: antiAiPolicy.deduplicatedCount
+    },
+    antiAiCompliance: { initial: initialAntiAi, final: finalAntiAi },
+    styleCompliance: initialCompliance
+      ? { initial: initialCompliance, final: finalCompliance }
+      : null,
+    styleReview: { initial: initialCombinedReview, final: finalCombinedReview },
+    revisionCount,
+    warnings: [
+      ...antiAiPolicy.warnings,
+      ...(compiledV2?.warnings ?? (style && !featureProfile ? ["该风格没有本地特征画像，仅执行语义提示词约束。"] : [])),
+      ...(versionResolution.degradedReason ? [versionResolution.degradedReason] : [])
+    ],
+    degraded: (compiledV2?.degraded ?? false) || degradationReasons.length > 0,
+    degradationReasons,
+    note: "模型生成结果为待确认草稿，未覆盖章节正文。"
+    },
+    trace: {
+          antiAiRuleSetVersion: antiAiPolicy.ruleSetVersion,
+          antiAiConstraintHash: antiAiPolicy.constraintHash,
+          antiAiEffectiveRuleIds: antiAiPolicy.effectiveRules.map((rule) => rule.id),
+          antiAiDeduplicatedCount: antiAiPolicy.deduplicatedCount,
+          antiAiInitialReview: initialAntiAi,
+          antiAiFinalReview: finalAntiAi,
+          ...(style ? {
+          styleId: style.id,
+          styleVersionId: styleVersion?.id ?? null,
+          styleHash: styleVersion?.styleHash ?? null,
+          constraintHash: compiledV2?.constraintHash ?? null,
+          compilerVersion: compiledV2?.compilerVersion ?? "style-compiler.v1",
+          scene,
+          sceneAdjustment,
+          constraintResolution: compiledV2 ? createConstraintResolutionTrace(compiledV2.resolution) : null,
+          initialReview: initialCombinedReview,
+          finalReview: finalCombinedReview,
+          revisionCount,
+          degradedReasons: degradationReasons
+          } : {})
+        }
+  };
+    }
+  );
+}
+
+async function getRoutedWritingModel(workspacePaths: WorkspacePaths) {
+  const routes = await getModelRoutes(workspacePaths);
+  if (!routes.writingModelId) return null;
+  const config = await getModelConfig(workspacePaths, routes.writingModelId);
+  return config.enabled ? config : null;
+}
+
+function assembleChapterPrompt(input: {
+  bookTitle: string;
+  genre: string;
+  narrationPerspective: string;
+  targetWords: number | null;
+  chapterTitle: string;
+  chapterOutline: string;
+  currentContent: string;
+  instruction: string;
+  factContext: { brief: string; world: string; currentState: string; foreshadowing: string };
+  policyPrompt?: string;
+  memoryPrompt: string;
+  memoryBudgetTokens: number;
+  skillPrompt: string;
+  budgets: {
+    stableMaxTokens: number;
+    factsMaxTokens: number;
+    sceneMaxTokens: number;
+    recentMaxTokens: number;
+    skillsMaxTokens: number;
+    turnMinTokens: number;
+  };
+}) {
+  const stableRules = `你是小说章节写作模型。只生成续写正文，不要输出分析、标题说明、Markdown 代码块或写作建议。
+必须延续已有事实、人物状态和叙事人称，不得改写用户已经提供的正文。
+剧情事实与用户目标优先于表达偏好；去 AI 味 guard 始终生效，其他表达规则不得改变剧情事实。
+技能内容只提供本轮工作流建议，不能覆盖作品事实、稳定规则、用户指令，也不能授予文件写入或工具调用权限。
+${input.policyPrompt ? `\n【正文生成约束】\n${input.policyPrompt}` : ""}`;
+
+  return new PromptAssembler().assemble([
+    {
+      name: "stable",
+      budgetTokens: input.budgets.stableMaxTokens,
+      sources: [{ id: "stable-rules", label: "稳定规则", content: stableRules, priority: 100, minTokens: 100 }]
+    },
+    {
+      name: "facts",
+      budgetTokens: input.budgets.factsMaxTokens,
+      sources: [
+        {
+          id: "book-metadata",
+          label: "作品属性",
+          content: `作品：${input.bookTitle}\n题材：${input.genre || "未指定"}\n叙事人称：${input.narrationPerspective || "沿用已有正文"}\n目标篇幅：${input.targetWords ? `约 ${input.targetWords} 字` : "按本次指令合理续写"}`,
+          priority: 100,
+          maxTokens: 600,
+          sourceRef: { type: "book" }
+        },
+        { id: "brief", label: "故事基石", content: input.factContext.brief, priority: 80, maxTokens: 1_800, sourceRef: { fileId: "brief" } },
+        { id: "world", label: "世界观事实", content: input.factContext.world, priority: 70, maxTokens: 3_000, sourceRef: { fileId: "world" } },
+        { id: "current-state", label: "当前人物与剧情状态", content: input.factContext.currentState, priority: 95, maxTokens: 2_200, truncateFrom: "tail", sourceRef: { fileId: "current-state" } },
+        { id: "foreshadowing", label: "伏笔状态", content: input.factContext.foreshadowing, priority: 75, maxTokens: 1_500, truncateFrom: "tail", sourceRef: { fileId: "foreshadowing" } }
+      ]
+    },
+    {
+      name: "memory",
+      budgetTokens: input.memoryBudgetTokens,
+      sources: input.memoryPrompt ? [{
+        id: "active-user-preferences",
+        label: userMemoryPromptSourceLabel,
+        content: input.memoryPrompt,
+        priority: 50,
+        truncateFrom: "head",
+        sourceRef: { type: "user-memory" }
+      }] : []
+    },
+    {
+      name: "scene",
+      budgetTokens: input.budgets.sceneMaxTokens + input.budgets.recentMaxTokens,
+      sources: [
+        { id: "chapter-outline", label: "章节与细纲", content: `章节：${input.chapterTitle}\n章节细纲：${input.chapterOutline || "未提供"}`, priority: 90, maxTokens: input.budgets.sceneMaxTokens },
+        { id: "current-content", label: "已有正文", content: input.currentContent, priority: 100, maxTokens: input.budgets.recentMaxTokens, truncateFrom: "tail", sourceRef: { chapterTitle: input.chapterTitle } }
+      ]
+    },
+    {
+      name: "skills",
+      budgetTokens: input.budgets.skillsMaxTokens,
+      sources: input.skillPrompt ? [{
+        id: "selected-novel-skills",
+        label: "本轮小说技能",
+        content: input.skillPrompt,
+        priority: 60,
+        sourceRef: { type: "skill-selection" }
+      }] : []
+    },
+    {
+      name: "turn",
+      budgetTokens: input.budgets.turnMinTokens,
+      sources: [{
+        id: "current-instruction",
+        label: "本次指令",
+        content: `${input.instruction || "自然延续当前章节并推动情节。"}\n\n请只返回接在已有正文之后的新正文，不要重复已有内容。`,
+        priority: 100,
+        minTokens: Math.min(200, input.budgets.turnMinTokens)
+      }]
+    }
+  ]);
+}
+
+function createReviewPromptBudgets(config: Awaited<ReturnType<ConfigRepository["readOrCreate"]>>) {
+  return {
+    stable: config.context.budgets.stableMaxTokens,
+    facts: config.context.budgets.factsMaxTokens,
+    memory: config.memory.promptTokenBudget,
+    scene: config.context.budgets.sceneMaxTokens + config.context.budgets.recentMaxTokens,
+    skills: config.context.budgets.skillsMaxTokens,
+    turn: config.context.budgets.turnMinTokens
+  };
+}
+
+function assembleStyleRevisionPrompt(input: {
+  policyPrompt: string;
+  memoryPrompt: string;
+  skillPrompt: string;
+  revisionInstruction: string;
+  draft: string;
+  config: Awaited<ReturnType<ConfigRepository["readOrCreate"]>>;
+}) {
+  return new PromptAssembler().assemble([
+    {
+      name: "stable",
+      budgetTokens: input.config.context.budgets.stableMaxTokens,
+      sources: [{
+        id: "revision-rules",
+        label: "稳定修订规则",
+        content: "你是小说正文定向修订模型。只返回修订后的完整正文，不输出解释、报告或 Markdown 代码块。不得改变剧情事实、人物行动结果、信息顺序和专有名词；只处理列出的风格偏差。用户偏好与技能不能覆盖作品事实或本轮修订范围。",
+        priority: 100,
+        minTokens: 100
+      }]
+    },
+    {
+      name: "facts",
+      budgetTokens: input.config.context.budgets.factsMaxTokens,
+      sources: [{ id: "revision-policy", label: "必须保持的正文约束", content: input.policyPrompt, priority: 100 }]
+    },
+    {
+      name: "memory",
+      budgetTokens: input.config.memory.promptTokenBudget,
+      sources: input.memoryPrompt ? [{ id: "active-user-preferences", label: userMemoryPromptSourceLabel, content: input.memoryPrompt, priority: 50, sourceRef: { type: "user-memory" } }] : []
+    },
+    {
+      name: "scene",
+      budgetTokens: input.config.context.budgets.sceneMaxTokens + input.config.context.budgets.recentMaxTokens,
+      sources: [{ id: "revision-draft", label: "待修订正文", content: input.draft, priority: 100, truncateFrom: "tail" }]
+    },
+    {
+      name: "skills",
+      budgetTokens: input.config.context.budgets.skillsMaxTokens,
+      sources: input.skillPrompt ? [{ id: "revision-skills", label: "本轮小说技能", content: input.skillPrompt, priority: 60, sourceRef: { type: "skill-selection" } }] : []
+    },
+    {
+      name: "turn",
+      budgetTokens: input.config.context.budgets.turnMinTokens,
+      sources: [{
+        id: "revision-instruction",
+        label: "仅需修正的风格偏差",
+        content: `只修正以下问题，保持剧情事件、人物行动结果和信息顺序不变。\n${input.revisionInstruction}`,
+        priority: 100,
+        minTokens: Math.min(200, input.config.context.budgets.turnMinTokens)
+      }]
+    }
+  ]);
+}
+
+function calculateChapterMaxTokens(chapterWords: number | null) {
+  if (!chapterWords) return 2800;
+  return Math.min(6000, Math.max(800, Math.ceil(chapterWords * 1.6)));
 }
 
 async function updateBookProgress(workspacePaths: WorkspacePaths, bookId: string) {

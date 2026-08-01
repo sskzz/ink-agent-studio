@@ -1,6 +1,7 @@
 import type { ModelProviderAdapter } from "../types.js";
 import { modelTestResult } from "../types.js";
 import { parseOpenAIModelListResponse } from "./modelListResponse.js";
+import { openaiCompatibleAdapter } from "./openaiCompatibleAdapter.js";
 
 function normalizeBaseUrl(baseUrl: string) {
   return baseUrl.replace(/\/+$/, "");
@@ -36,5 +37,12 @@ export const ollamaAdapter: ModelProviderAdapter = {
 
     await parseOpenAIModelListResponse(response, "Ollama 连接失败");
     return modelTestResult(config, true, "Ollama 本地模型服务连接成功");
+  },
+
+  async generateText(config, apiKey, input) {
+    if (!openaiCompatibleAdapter.generateText) {
+      throw new Error("OpenAI Compatible adapter 未实现文本生成");
+    }
+    return openaiCompatibleAdapter.generateText(config, apiKey, input);
   }
 };

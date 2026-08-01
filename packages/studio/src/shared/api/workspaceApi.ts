@@ -23,6 +23,27 @@ export interface WorkspaceBookCharacter {
   markdown: string;
 }
 
+export interface WorkspaceBookEntity {
+  id: string;
+  entityType: "character" | "faction" | "location" | "item";
+  name: string;
+  role: string;
+  description: string;
+  markdown: string;
+}
+
+export interface WorkspaceBookInitialization {
+  runId: string | null;
+  status: "queued" | "running" | "cancelling" | "cancelled" | "completed" | "failed" | "interrupted";
+  stage: string | null;
+  error: string | null;
+}
+
+export interface WorkspaceBookCreationResult {
+  book: WorkspaceBookDetail;
+  hydrationWarning: string | null;
+}
+
 export interface WorkspaceCoreFile {
   id: string;
   title: string;
@@ -39,6 +60,8 @@ export interface WorkspaceBookDetail {
   updatedAt: string;
   brief: string;
   writingStyleId: string;
+  writingStyleVersionId: string;
+  initialization: WorkspaceBookInitialization | null;
   attributes: {
     narrationPerspective: string;
     channel: string;
@@ -55,6 +78,9 @@ export interface WorkspaceBookDetail {
     plannedChapters: number;
   };
   characters: WorkspaceBookCharacter[];
+  factions: WorkspaceBookEntity[];
+  locations: WorkspaceBookEntity[];
+  items: WorkspaceBookEntity[];
   coreFiles: WorkspaceCoreFile[];
   worldview: WorkspaceCoreFile;
 }
@@ -81,6 +107,7 @@ interface BackendBookDetail {
   genre: string;
   status: "planning" | "drafting" | "reviewing" | "paused";
   writingStyleId: string | null;
+  writingStyleVersionId?: string | null;
   updatedAt: string;
   attributes: {
     narrationPerspective: string;
@@ -99,6 +126,7 @@ interface BackendBookDetail {
   };
   coreFiles: BackendBookFile[];
   worldview: BackendBookFile | null;
+  initialization?: WorkspaceBookInitialization | null;
 }
 
 interface BackendBookEntity {
@@ -158,8 +186,11 @@ async function loadFileContent(bookId: string, file: BackendBookFile): Promise<W
   };
 }
 
-function createCharacterMarkdown(entity: BackendBookEntity) {
+function createEntityMarkdown(entity: BackendBookEntity) {
   return `# ${entity.name}
+
+## 类型
+${entity.entityType}
 
 ## 定位
 ${entity.role || "待补充"}
@@ -170,10 +201,10 @@ ${entity.description || "待补充"}
 }
 
 async function toWorkspaceBookDetail(detail: BackendBookDetail): Promise<WorkspaceBookDetail> {
-  const [coreFiles, worldview, characters] = await Promise.all([
+  const [coreFiles, worldview, entities] = await Promise.all([
     Promise.all(detail.coreFiles.map((file) => loadFileContent(detail.id, file))),
     detail.worldview ? loadFileContent(detail.id, detail.worldview) : Promise.resolve(createEmptyFile("world", "世界观")),
-    apiGet<BackendBookEntity[]>(`/books/${detail.id}/entities?type=character`).catch(() => [])
+    apiGet<BackendBookEntity[]>(`/books/${detail.id}/entities`).catch(() => [])
   ]);
 
   const storyBrief = coreFiles.find((file) => file.id === "brief")?.markdown ?? "";
@@ -186,6 +217,8 @@ async function toWorkspaceBookDetail(detail: BackendBookDetail): Promise<Workspa
     updatedAt: formatUpdatedAt(detail.updatedAt),
     brief: storyBrief,
     writingStyleId: detail.writingStyleId ?? "",
+    writingStyleVersionId: detail.writingStyleVersionId ?? "",
+    initialization: detail.initialization ?? null,
     attributes: {
       narrationPerspective: detail.attributes.narrationPerspective || "AI 自动生成",
       channel: detail.attributes.channel || "AI 自动生成",
@@ -201,16 +234,78 @@ async function toWorkspaceBookDetail(detail: BackendBookDetail): Promise<Workspa
       writtenChapters: detail.progress.writtenChapters,
       plannedChapters: detail.progress.plannedChapters ?? 0
     },
-    characters: characters.map((character) => ({
+    characters: entities.filter((entity) => entity.entityType === "character").map((character) => ({
       id: character.id,
       name: character.name,
       role: character.role.includes("主") ? "主要" : "次要",
       identity: character.role || character.description || "待补充角色定位",
-      markdown: createCharacterMarkdown(character)
+      markdown: createEntityMarkdown(character)
     })),
+    factions: mapEntities(entities, "faction"),
+    locations: mapEntities(entities, "location"),
+    items: mapEntities(entities, "item"),
     coreFiles,
     worldview
   };
+}
+
+function toWorkspaceBookDetailWithoutContent(detail: BackendBookDetail): WorkspaceBookDetail {
+  const coreFiles = detail.coreFiles.map((file) => ({
+    id: file.id,
+    title: file.title,
+    fileName: file.path,
+    summary: file.summary,
+    markdown: `# ${file.title}\n\n作品已创建，但文件内容暂时读取失败。请稍后刷新。`
+  }));
+  const worldview = detail.worldview
+    ? {
+        id: detail.worldview.id,
+        title: detail.worldview.title,
+        fileName: detail.worldview.path,
+        summary: detail.worldview.summary,
+        markdown: `# ${detail.worldview.title}\n\n作品已创建，但世界观内容暂时读取失败。请稍后刷新。`
+      }
+    : createEmptyFile("world", "世界观");
+
+  return {
+    id: detail.id,
+    title: detail.title,
+    genre: detail.genre,
+    status: statusLabel[detail.status],
+    updatedAt: formatUpdatedAt(detail.updatedAt),
+    brief: coreFiles.find((file) => file.id === "brief")?.markdown ?? "",
+    writingStyleId: detail.writingStyleId ?? "",
+    writingStyleVersionId: detail.writingStyleVersionId ?? "",
+    initialization: detail.initialization ?? null,
+    attributes: {
+      narrationPerspective: detail.attributes.narrationPerspective || "AI 自动生成",
+      channel: detail.attributes.channel || "AI 自动生成",
+      protagonistGender: detail.attributes.protagonistGender || "AI 自动生成",
+      protagonistName: detail.attributes.protagonistName || "AI 自动生成",
+      plannedWords: detail.attributes.plannedWords ?? 0,
+      chapterWords: detail.attributes.chapterWords ?? 0,
+      worldFileName: worldview.fileName
+    },
+    progress: {
+      currentChapter: detail.progress.currentChapterId ?? "尚未开始正文写作",
+      writtenWords: detail.progress.writtenWords,
+      writtenChapters: detail.progress.writtenChapters,
+      plannedChapters: detail.progress.plannedChapters ?? 0
+    },
+    characters: [],
+    factions: [],
+    locations: [],
+    items: [],
+    coreFiles,
+    worldview
+  };
+}
+
+function mapEntities(entities: BackendBookEntity[], entityType: WorkspaceBookEntity["entityType"]): WorkspaceBookEntity[] {
+  return entities.filter((entity) => entity.entityType === entityType).map((entity) => ({
+    ...entity,
+    markdown: createEntityMarkdown(entity)
+  }));
 }
 
 export async function listWorkspaceBookDetails(): Promise<WorkspaceBookDetail[]> {
@@ -224,7 +319,12 @@ export async function getWorkspaceBookDetail(bookId: string): Promise<WorkspaceB
   return toWorkspaceBookDetail(detail);
 }
 
-export async function createWorkspaceBook(draft: WorkspaceBookDraft): Promise<WorkspaceBookDetail> {
+export async function getWorkspaceBookInitialization(bookId: string): Promise<WorkspaceBookInitialization | null> {
+  const detail = await apiGet<Pick<BackendBookDetail, "initialization">>(`/books/${bookId}`);
+  return detail.initialization ?? null;
+}
+
+export async function createWorkspaceBook(draft: WorkspaceBookDraft): Promise<WorkspaceBookCreationResult> {
   const detail = await apiPost<BackendBookDetail>("/books", {
     title: draft.title,
     genre: draft.genre,
@@ -240,6 +340,24 @@ export async function createWorkspaceBook(draft: WorkspaceBookDraft): Promise<Wo
     worldFileContent: draft.worldFileContent
   });
 
+  try {
+    return { book: await toWorkspaceBookDetail(detail), hydrationWarning: null };
+  } catch (error) {
+    return {
+      book: toWorkspaceBookDetailWithoutContent(detail),
+      hydrationWarning: error instanceof Error ? error.message : "作品详情读取失败"
+    };
+  }
+}
+
+export async function retryWorkspaceBookInitialization(bookId: string) {
+  return apiPost<WorkspaceBookInitialization & { reused: boolean }>(`/books/${bookId}/initialize`);
+}
+
+export async function upgradeWorkspaceBookWritingStyleVersion(bookId: string, versionId?: string) {
+  const detail = await apiPost<BackendBookDetail>(`/books/${bookId}/writing-style/upgrade`, {
+    versionId: versionId ?? null
+  });
   return toWorkspaceBookDetail(detail);
 }
 

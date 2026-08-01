@@ -80,6 +80,14 @@ export interface ModelConfig {
   purpose: ModelPurpose;
   enabled: boolean;
   isDefault: boolean;
+  capabilities: {
+    pricing?: {
+      currency?: string;
+      promptMicrosPerMillionTokens?: number;
+      completionMicrosPerMillionTokens?: number;
+    };
+    [key: string]: unknown;
+  };
   note: string;
   updatedAt: string;
 }

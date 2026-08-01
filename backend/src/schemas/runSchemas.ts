@@ -12,6 +12,7 @@ export const agentRunRecordSchema = z.object({
   modelConfigId: z.string().nullable(),
   promptVersion: z.string().nullable(),
   tokenUsageJson: z.unknown().nullable(),
+  styleTraceJson: z.unknown().nullable().optional().default(null),
   errorMessage: z.string().nullable(),
   startedAt: z.string(),
   finishedAt: z.string().nullable()

@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "app-config.v1",
+  "revision": 1,
+  "general": {
+    "locale": "zh-CN",
+    "autosaveIntervalMs": 30000
+  },
+  "runtime": {
+    "globalConcurrency": 2,
+    "perBookMutationConcurrency": 1,
+    "queueLimit": 50,
+    "shutdownGraceMs": 10000
+  },
+  "events": {
+    "heartbeatMs": 15000,
+    "streamBatchIntervalMs": 500,
+    "streamBatchCharacters": 2048,
+    "replayLimit": 5000,
+    "inlinePayloadMaxBytes": 32768
+  },
+  "models": {
+    "defaultTimeoutMs": 90000,
+    "retry": {
+      "maxAttemptsPerModel": 2,
+      "maxTotalAttempts": 4,
+      "baseDelayMs": 500,
+      "maxDelayMs": 5000
+    }
+  },
+  "context": {
+    "defaultContextWindow": 32768,
+    "defaultMaxOutputTokens": 4096,
+    "safetyMarginRatio": 0.1,
+    "compressionThresholdRatio": 0.7,
+    "budgets": {
+      "stableMaxTokens": 4000,
+      "factsMaxTokens": 8000,
+      "sceneMaxTokens": 6000,
+      "recentMaxTokens": 8000,
+      "sessionMaxTokens": 4000,
+      "skillsMaxTokens": 4000,
+      "turnMinTokens": 1000
+    }
+  },
+  "sessions": {
+    "searchResultLimit": 20,
+    "searchSnippetCharacters": 300,
+    "recentMessageLimit": 30
+  },
+  "patches": {
+    "approvalRequired": true,
+    "keepBeforeApplyBackup": true
+  },
+  "memory": {
+    "enabled": true,
+    "writeApprovalRequired": true,
+    "promptTokenBudget": 1200,
+    "maxActiveEntries": 50
+  },
+  "skills": {
+    "enabled": true,
+    "writeApprovalRequired": true,
+    "maxLoadedSkills": 5,
+    "promptTokenBudget": 4000
+  },
+  "storage": {
+    "sqliteBusyTimeoutMs": 5000,
+    "backupBeforeMigration": true,
+    "automaticPruning": false
+  },
+  "plugins": { "enabled": false },
+  "mcp": { "enabled": false },
+  "cron": {
+    "enabled": false,
+    "timezone": "Asia/Shanghai",
+    "maxConcurrentJobs": 1,
+    "misfirePolicy": "run_once"
+  },
+  "features": {
+    "asyncRuns": false,
+    "agentLoop": false,
+    "patchApply": false,
+    "skills": false,
+    "plugins": false,
+    "mcp": false,
+    "cron": false
+  }
+}

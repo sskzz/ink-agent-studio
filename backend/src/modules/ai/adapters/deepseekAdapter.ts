@@ -14,5 +14,13 @@ export const deepseekAdapter: ModelProviderAdapter = {
 
   async test(config, apiKey) {
     return openaiCompatibleAdapter.test(config, apiKey);
+  },
+
+  async generateText(config, apiKey, input) {
+    if (!openaiCompatibleAdapter.generateText) {
+      throw new Error("OpenAI Compatible adapter 未实现文本生成");
+    }
+
+    return openaiCompatibleAdapter.generateText(config, apiKey, input);
   }
 };

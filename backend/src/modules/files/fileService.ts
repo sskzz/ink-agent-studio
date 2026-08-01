@@ -29,9 +29,41 @@ function resolveBookFilePath(workspacePaths: WorkspacePaths, bookId: string, fil
   return resolveInsideRoot(createBookPaths(workspacePaths, bookId).bookDir, file.path);
 }
 
+export interface BookFilesSnapshot {
+  files: BookFileRecord[];
+  contents: Array<{ fileId: string; content: string }>;
+}
+
 export async function listBookFiles(workspacePaths: WorkspacePaths, bookId: string) {
   await getBook(workspacePaths, bookId);
   return readFiles(workspacePaths, bookId);
+}
+
+export async function captureBookFilesSnapshot(
+  workspacePaths: WorkspacePaths,
+  bookId: string,
+  fileIds: readonly string[]
+): Promise<BookFilesSnapshot> {
+  const files = await listBookFiles(workspacePaths, bookId) as BookFileRecord[];
+  const contents = await Promise.all(fileIds.map(async (fileId) => {
+    const file = files.find((item) => item.id === fileId);
+    if (!file) throw notFound("文件不存在", { bookId, fileId });
+    return { fileId, content: await readTextFile(resolveBookFilePath(workspacePaths, bookId, file)) };
+  }));
+  return { files, contents };
+}
+
+export async function restoreBookFilesSnapshot(
+  workspacePaths: WorkspacePaths,
+  bookId: string,
+  snapshot: BookFilesSnapshot
+) {
+  await Promise.all(snapshot.contents.map(async ({ fileId, content }) => {
+    const file = snapshot.files.find((item) => item.id === fileId);
+    if (!file) throw notFound("备份中的文件索引不存在", { bookId, fileId });
+    await writeTextFileAtomic(resolveBookFilePath(workspacePaths, bookId, file), content);
+  }));
+  await writeFiles(workspacePaths, bookId, snapshot.files);
 }
 
 export async function getBookFileContent(workspacePaths: WorkspacePaths, bookId: string, fileId: string) {

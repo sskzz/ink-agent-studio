@@ -3,15 +3,25 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.16.0"
+  },
   "scripts": {
+    "predev": "pnpm --dir ../packages/contracts build",
     "dev": "tsx watch src/index.ts",
+    "prestart": "pnpm --dir ../packages/contracts build",
     "start": "node dist/index.js",
+    "prebuild": "pnpm --dir ../packages/contracts build",
     "build": "tsc -p tsconfig.json",
+    "pretypecheck": "pnpm --dir ../packages/contracts build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "pretest": "pnpm --dir ../packages/contracts build",
     "test": "vitest run"
   },
   "dependencies": {
+    "@ink-agent/contracts": "workspace:*",
     "@hono/node-server": "^1.14.4",
+    "dotenv": "^16.6.1",
     "hono": "^4.8.4",
     "zod": "^3.25.76"
   },

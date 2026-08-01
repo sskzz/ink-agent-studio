@@ -4,15 +4,24 @@ import { resolveInsideRoot } from "../../utils/safePath.js";
 
 export interface WorkspacePaths {
   root: string;
+  configDir: string;
   indexDir: string;
   secretsDir: string;
   booksDir: string;
+  stylesDir: string;
+  skillsDir: string;
+  backupsDir: string;
+  logsDir: string;
+  appConfigFile: string;
+  runtimeDatabaseFile: string;
+  workspaceLockFile: string;
   booksIndexFile: string;
   modelConfigsFile: string;
   modelRoutesFile: string;
   writingStylesFile: string;
   runsLogFile: string;
   modelSecretsFile: string;
+  skillsIndexFile: string;
 }
 
 function getDefaultWorkspaceRoot() {
@@ -28,20 +37,34 @@ function getDefaultWorkspaceRoot() {
  */
 export function createWorkspacePaths(root = process.env.INK_AGENT_DATA_DIR ?? getDefaultWorkspaceRoot()): WorkspacePaths {
   const workspaceRoot = path.resolve(root);
+  const configDir = resolveInsideRoot(workspaceRoot, "config");
   const indexDir = resolveInsideRoot(workspaceRoot, "index");
   const secretsDir = resolveInsideRoot(workspaceRoot, "secrets");
   const booksDir = resolveInsideRoot(workspaceRoot, "books");
+  const stylesDir = resolveInsideRoot(workspaceRoot, "styles");
+  const skillsDir = resolveInsideRoot(workspaceRoot, "skills");
+  const backupsDir = resolveInsideRoot(workspaceRoot, "backups");
+  const logsDir = resolveInsideRoot(workspaceRoot, "logs");
 
   return {
     root: workspaceRoot,
+    configDir,
     indexDir,
     secretsDir,
     booksDir,
+    stylesDir,
+    skillsDir,
+    backupsDir,
+    logsDir,
+    appConfigFile: resolveInsideRoot(configDir, "app-config.json"),
+    runtimeDatabaseFile: resolveInsideRoot(indexDir, "runtime.sqlite"),
+    workspaceLockFile: resolveInsideRoot(indexDir, "workspace.lock"),
     booksIndexFile: resolveInsideRoot(indexDir, "books.json"),
     modelConfigsFile: resolveInsideRoot(indexDir, "model-configs.json"),
     modelRoutesFile: resolveInsideRoot(indexDir, "model-routes.json"),
     writingStylesFile: resolveInsideRoot(indexDir, "writing-styles.json"),
     runsLogFile: resolveInsideRoot(indexDir, "runs.jsonl"),
-    modelSecretsFile: resolveInsideRoot(secretsDir, "model-secrets.json")
+    modelSecretsFile: resolveInsideRoot(secretsDir, "model-secrets.json"),
+    skillsIndexFile: resolveInsideRoot(skillsDir, "index.json")
   };
 }

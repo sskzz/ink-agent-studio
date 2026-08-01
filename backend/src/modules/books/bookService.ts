@@ -13,6 +13,8 @@ import {
   listBooks,
   saveBook
 } from "./bookRepository.js";
+import { getWritingStyle } from "../styles/writingStyleService.js";
+import { getStyleVersion } from "../styles/writingStyleVersionService.js";
 
 function isBlank(value: unknown) {
   return value === null || value === undefined || value === "";
@@ -59,6 +61,7 @@ function toBookDetailDto(book: BookRecord, files: BookFileRecord[]) {
       plannedWords: book.plannedWords,
       chapterWords: book.chapterWords,
       writingStyleId: book.writingStyleId,
+      writingStyleVersionId: book.writingStyleVersionId,
       worldFileId: book.worldFileId
     },
     progress: {
@@ -88,6 +91,9 @@ export async function getBookDetail(workspacePaths: WorkspacePaths, bookId: stri
 
 export async function createBook(workspacePaths: WorkspacePaths, body: unknown) {
   const input = bookDraftInputSchema.parse(body);
+  const selectedStyle = input.writingStyleId ? await getWritingStyle(workspacePaths, input.writingStyleId) : null;
+  const selectedVersionId = input.writingStyleVersionId ?? selectedStyle?.latestVersionId ?? null;
+  if (selectedVersionId && selectedStyle) await getStyleVersion(workspacePaths, selectedStyle.id, selectedVersionId);
   const now = new Date().toISOString();
   const book: BookRecord = {
     id: createBookId(),
@@ -97,6 +103,7 @@ export async function createBook(workspacePaths: WorkspacePaths, body: unknown) 
     narrationPerspective: input.narrationPerspective,
     channel: input.channel,
     writingStyleId: input.writingStyleId,
+    writingStyleVersionId: selectedVersionId,
     protagonistGender: input.protagonistGender,
     protagonistName: input.protagonistName,
     plannedWords: input.plannedWords,
@@ -135,6 +142,19 @@ export async function updateBook(workspacePaths: WorkspacePaths, bookId: string,
     updatedAt: new Date().toISOString()
   };
 
+  if (parsed.writingStyleId !== undefined && parsed.writingStyleId !== current.writingStyleId) {
+    if (parsed.writingStyleId) {
+      const style = await getWritingStyle(workspacePaths, parsed.writingStyleId);
+      nextBook.writingStyleVersionId = style.latestVersionId ?? null;
+    } else {
+      nextBook.writingStyleVersionId = null;
+    }
+  }
+  if (parsed.writingStyleVersionId) {
+    if (!nextBook.writingStyleId) throw badRequest("不能在未选择写作风格时设置风格版本");
+    await getStyleVersion(workspacePaths, nextBook.writingStyleId, parsed.writingStyleVersionId);
+  }
+
   await saveBook(workspacePaths, nextBook);
   return getBookDetail(workspacePaths, bookId);
 }
@@ -145,6 +165,22 @@ export async function deleteBook(workspacePaths: WorkspacePaths, bookId: string)
     id: bookId,
     removedFiles: true
   };
+}
+
+export async function upgradeBookWritingStyleVersion(
+  workspacePaths: WorkspacePaths,
+  bookId: string,
+  versionId?: string | null
+) {
+  const book = await getBook(workspacePaths, bookId);
+  if (!book.writingStyleId) throw badRequest("作品尚未选择写作风格", { bookId });
+  const style = await getWritingStyle(workspacePaths, book.writingStyleId);
+  const nextVersionId = versionId ?? style.latestVersionId;
+  if (!nextVersionId) throw badRequest("写作风格尚无可用版本", { writingStyleId: style.id });
+  await getStyleVersion(workspacePaths, style.id, nextVersionId);
+  const nextBook = { ...book, writingStyleVersionId: nextVersionId, updatedAt: new Date().toISOString() };
+  await saveBook(workspacePaths, nextBook);
+  return getBookDetail(workspacePaths, bookId);
 }
 
 export async function readBookRecordForDebug(workspacePaths: WorkspacePaths, bookId: string) {

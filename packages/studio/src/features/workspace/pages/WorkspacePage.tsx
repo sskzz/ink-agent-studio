@@ -1,85 +1,29 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import { Trash2 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { listWritingStyles } from "@/features/writing-styles/api/writingStylesApi";
 import type { WritingStyle } from "@/features/writing-styles/data/writingStyles";
-import { createWorkspaceBook, deleteWorkspaceBook, listWorkspaceBookDetails } from "@/shared/api/workspaceApi";
+import {
+  createWorkspaceBook,
+  deleteWorkspaceBook,
+  getWorkspaceBookDetail,
+  getWorkspaceBookInitialization,
+  listWorkspaceBookDetails,
+  retryWorkspaceBookInitialization
+} from "@/shared/api/workspaceApi";
 import { Badge } from "@/shared/components/ui/Badge";
-import { MarkdownRenderer } from "@/shared/components/ui/MarkdownRenderer";
 import { PageHeader } from "@/shared/components/ui/PageHeader";
 import { SelectField } from "@/shared/components/ui/SelectField";
+import { DocumentModal } from "@/features/workspace/components/DocumentModal";
+import { BookListView } from "@/features/workspace/components/BookListView";
+import type { BookDetail, BookDraft, DetailDocument } from "@/features/workspace/types";
 
 type WorkspaceView = "list" | "create" | "preview" | "detail";
 
 interface WorkspaceRouteState {
   bookId?: string;
   view?: WorkspaceView;
-}
-
-interface BookDraft {
-  title: string;
-  genre: string;
-  narrationPerspective: string;
-  channel: string;
-  writingStyleId: string;
-  protagonistGender: string;
-  protagonistName: string;
-  plannedWords: string;
-  chapterWords: string;
-  brief: string;
-  worldFileName: string;
-  worldFileContent: string;
-}
-
-interface BookCharacter {
-  id: string;
-  name: string;
-  role: "主要" | "次要";
-  identity: string;
-  markdown: string;
-}
-
-interface CoreFile {
-  id: string;
-  title: string;
-  fileName: string;
-  summary: string;
-  markdown: string;
-}
-
-interface BookDetail {
-  id: string;
-  title: string;
-  genre: string;
-  status: string;
-  updatedAt: string;
-  brief: string;
-  writingStyleId: string;
-  attributes: {
-    narrationPerspective: string;
-    channel: string;
-    protagonistGender: string;
-    protagonistName: string;
-    plannedWords: number;
-    chapterWords: number;
-    worldFileName: string;
-  };
-  progress: {
-    currentChapter: string;
-    writtenWords: number;
-    writtenChapters: number;
-    plannedChapters: number;
-  };
-  characters: BookCharacter[];
-  coreFiles: CoreFile[];
-  worldview: CoreFile;
-}
-
-interface DetailDocument {
-  title: string;
-  subtitle: string;
-  markdown: string;
 }
 
 const initialDraft: BookDraft = {
@@ -95,6 +39,22 @@ const initialDraft: BookDraft = {
   brief: "",
   worldFileName: "",
   worldFileContent: ""
+};
+
+const activeInitializationStatuses = new Set(["queued", "running", "cancelling"]);
+
+const initializationStageLabels: Record<string, string> = {
+  foundation: "基础设置与故事基石",
+  world: "世界观骨架",
+  story_graph: "核心人物与势力",
+  outline_plan: "总纲与分卷规划",
+  entity_requirements: "剧情实体需求",
+  outline: "总纲与分卷规划",
+  supporting_entities: "地点与次要角色",
+  items: "关键物品",
+  initial_state: "初始状态与伏笔池",
+  consistency_review: "全局一致性检查",
+  apply_bundle: "写入作品文件"
 };
 
 function createWritingStyleOptions(styles: WritingStyle[]) {
@@ -141,6 +101,9 @@ export function WorkspacePage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [worldFileReading, setWorldFileReading] = useState(false);
+  const [worldFileError, setWorldFileError] = useState("");
+  const worldFileReadVersion = useRef(0);
 
   const selectedBook = books.find((book) => book.id === selectedBookId) ?? books[0];
   const writingStyleOptions = createWritingStyleOptions(writingStyles);
@@ -152,6 +115,15 @@ export function WorkspacePage() {
       setSelectedBookId(routeState.bookId);
       setActiveDocument(null);
       setView("detail");
+      navigate("/workspace", { replace: true, state: null });
+    } else if (routeState?.view === "create") {
+      worldFileReadVersion.current += 1;
+      setDraft(initialDraft);
+      setCreatedDraft(null);
+      setActiveDocument(null);
+      setWorldFileReading(false);
+      setWorldFileError("");
+      setView("create");
       navigate("/workspace", { replace: true, state: null });
     }
   }, [location.state, navigate]);
@@ -194,6 +166,42 @@ export function WorkspacePage() {
     };
   }, []);
 
+  useEffect(() => {
+    const initialization = selectedBook?.initialization;
+    if (view !== "detail" || !selectedBookId || !initialization || !activeInitializationStatuses.has(initialization.status)) {
+      return;
+    }
+    let ignore = false;
+    const timer = window.setInterval(() => {
+      void getWorkspaceBookInitialization(selectedBookId).then(async (nextInitialization) => {
+        if (ignore) return;
+        if (nextInitialization?.status === "completed") {
+          const updated = await getWorkspaceBookDetail(selectedBookId);
+          if (ignore) return;
+          setBooks((current) => current.map((book) => book.id === updated.id ? updated : book));
+          setFeedback("AI 已完成作品基础信息、核心文件和实体设定生成。");
+          return;
+        }
+        setBooks((current) => current.map((book) =>
+          book.id === selectedBookId ? { ...book, initialization: nextInitialization } : book
+        ));
+        if (nextInitialization?.status === "failed") {
+          setFeedback(`AI 作品初始化失败：${nextInitialization.error || "请检查规划模型与运行记录。"}`);
+        } else if (nextInitialization?.status === "interrupted") {
+          setFeedback("AI 作品初始化已中断，可以点击“重试初始化”从检查点继续。");
+        } else if (nextInitialization?.status === "cancelled") {
+          setFeedback("AI 作品初始化已取消，可以点击“重试初始化”继续。");
+        }
+      }).catch((error) => {
+        if (!ignore) setFeedback(`AI 初始化状态读取失败：${toMessage(error)}`);
+      });
+    }, 1_500);
+    return () => {
+      ignore = true;
+      window.clearInterval(timer);
+    };
+  }, [selectedBook?.initialization?.status, selectedBookId, view]);
+
   function updateDraft(patch: Partial<BookDraft>) {
     setDraft((currentDraft) => ({
       ...currentDraft,
@@ -202,9 +210,12 @@ export function WorkspacePage() {
   }
 
   function openCreateView() {
+    worldFileReadVersion.current += 1;
     setDraft(initialDraft);
     setCreatedDraft(null);
     setActiveDocument(null);
+    setWorldFileReading(false);
+    setWorldFileError("");
     setView("create");
   }
 
@@ -221,39 +232,81 @@ export function WorkspacePage() {
 
   function handleWorldFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
+    const readVersion = ++worldFileReadVersion.current;
 
     if (!file) {
+      setWorldFileReading(false);
+      setWorldFileError("");
       updateDraft({ worldFileName: "", worldFileContent: "" });
       return;
     }
 
+    setWorldFileReading(true);
+    setWorldFileError("");
     updateDraft({ worldFileName: file.name, worldFileContent: "" });
 
     // 新建作品时需要把用户上传的 world.md 正文写入后端，而不是只记录文件名。
     void file
       .text()
       .then((content) => {
+        if (worldFileReadVersion.current !== readVersion) return;
         updateDraft({ worldFileName: file.name, worldFileContent: content });
       })
       .catch(() => {
+        if (worldFileReadVersion.current !== readVersion) return;
+        setWorldFileError("世界观 Markdown 文件读取失败，请重新选择文件。");
         setFeedback("世界观 Markdown 文件读取失败，请重新选择 .md 文件后再创建作品。");
+      })
+      .finally(() => {
+        if (worldFileReadVersion.current === readVersion) setWorldFileReading(false);
       });
   }
 
   async function saveDraft() {
+    if (worldFileReading || worldFileError) {
+      setFeedback(worldFileError || "正在读取世界观 Markdown，请稍候再创建作品。");
+      return;
+    }
     setSaving(true);
 
     try {
-      const createdBook = await createWorkspaceBook(draft);
+      const { book: createdBook, hydrationWarning } = await createWorkspaceBook(draft);
       setBooks((currentBooks) => [createdBook, ...currentBooks.filter((book) => book.id !== createdBook.id)]);
       setSelectedBookId(createdBook.id);
       setCreatedDraft(null);
-      setFeedback("作品已创建到后端本地 workspace。");
+      if (hydrationWarning) {
+        setFeedback(`作品已创建，但详情内容暂时读取失败，请稍后刷新：${hydrationWarning}`);
+      } else if (createdBook.initialization?.status === "failed") {
+        setFeedback(`作品已创建，但 AI 初始化启动失败：${createdBook.initialization.error || "请重试初始化。"}`);
+      } else if (createdBook.initialization && activeInitializationStatuses.has(createdBook.initialization.status)) {
+        setFeedback("作品已创建，AI 正在自动生成基础信息、核心文件和实体设定。");
+      } else if (createdBook.initialization?.status === "completed") {
+        setFeedback("作品已创建，AI 初始化已经完成。");
+      } else {
+        setFeedback("作品已创建到后端本地 workspace，但 AI 初始化尚未启动。");
+      }
       setView("detail");
     } catch (error) {
       setCreatedDraft(draft);
       setFeedback(`后端创建失败，已保留前端预览供检查：${toMessage(error)}`);
       setView("preview");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function retryInitialization() {
+    if (!selectedBook) return;
+    setSaving(true);
+    setFeedback("");
+    try {
+      const initialization = await retryWorkspaceBookInitialization(selectedBook.id);
+      setBooks((current) => current.map((book) =>
+        book.id === selectedBook.id ? { ...book, initialization } : book
+      ));
+      setFeedback(initialization.reused ? "已从原运行检查点恢复 AI 初始化。" : "AI 初始化已重新启动。");
+    } catch (error) {
+      setFeedback(`AI 初始化重试失败：${toMessage(error)}`);
     } finally {
       setSaving(false);
     }
@@ -303,12 +356,23 @@ export function WorkspacePage() {
             </button>
           ) : view === "detail" ? (
             <>
-              <button className="primary-button" type="button" onClick={continueWriting}>
-                继续写作
+              <button
+                className="primary-button"
+                type="button"
+                disabled={Boolean(selectedBook?.initialization && activeInitializationStatuses.has(selectedBook.initialization.status))}
+                onClick={continueWriting}
+              >
+                {selectedBook?.initialization && activeInitializationStatuses.has(selectedBook.initialization.status) ? "AI 生成中" : "继续写作"}
               </button>
-              <button className="danger-button" type="button" disabled={saving} onClick={() => void deleteSelectedBook()}>
+              <button
+                className="danger-button"
+                type="button"
+                data-loading={saving ? "true" : undefined}
+                disabled={saving}
+                onClick={() => void deleteSelectedBook()}
+              >
                 <Trash2 size={16} aria-hidden="true" />
-                删除作品
+                {saving ? "删除中..." : "删除作品"}
               </button>
               <button className="ghost-button" type="button" onClick={openListView}>
                 返回作品库
@@ -333,6 +397,8 @@ export function WorkspacePage() {
           book={selectedBook}
           writingStyles={writingStyles}
           onOpenDocument={setActiveDocument}
+          onRetryInitialization={() => void retryInitialization()}
+          retryingInitialization={saving}
         />
       ) : null}
 
@@ -340,6 +406,8 @@ export function WorkspacePage() {
         <CreateBookView
           draft={draft}
           saving={saving}
+          worldFileReading={worldFileReading}
+          worldFileError={worldFileError}
           writingStyleOptions={writingStyleOptions}
           onFileChange={handleWorldFileChange}
           onSave={saveDraft}
@@ -356,64 +424,25 @@ export function WorkspacePage() {
   );
 }
 
-interface BookListViewProps {
-  books: BookDetail[];
-  onOpenDetail: (bookId: string) => void;
-}
-
-function BookListView({ books, onOpenDetail }: BookListViewProps) {
-  return (
-    <section className="workspace-layout book-list-layout">
-      <div className="book-list-panel">
-        <div className="section-title">
-          <div>
-            <p className="eyebrow">Library</p>
-            <h3>作品列表</h3>
-            <p className="muted">点击作品卡片进入详情。这里完全使用后端本地作品目录数据。</p>
-          </div>
-        </div>
-
-        <div className="book-card-grid">
-          {books.length === 0 ? (
-            <div className="empty-list">后端作品库暂无数据。点击右上角“新建作品”创建第一本作品。</div>
-          ) : null}
-          {books.map((book) => (
-            <button className="book-card book-card-button" key={book.id} type="button" onClick={() => onOpenDetail(book.id)}>
-              <div className="style-card-head">
-                <div>
-                  <strong>{book.title}</strong>
-                  <p>{book.genre}</p>
-                </div>
-                <Badge tone="blue">{book.status}</Badge>
-              </div>
-              <div className="style-metric-grid">
-                <span>
-                  <em>已写章节</em>
-                  {book.progress.writtenChapters}
-                </span>
-                <span>
-                  <em>更新</em>
-                  {book.updatedAt}
-                </span>
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
 interface BookDetailViewProps {
   book: BookDetail;
   writingStyles: WritingStyle[];
   onOpenDocument: (document: DetailDocument) => void;
+  onRetryInitialization: () => void;
+  retryingInitialization: boolean;
 }
 
-function BookDetailView({ book, writingStyles, onOpenDocument }: BookDetailViewProps) {
+function BookDetailView({
+  book,
+  writingStyles,
+  onOpenDocument,
+  onRetryInitialization,
+  retryingInitialization
+}: BookDetailViewProps) {
   const attributeRows = [
     ["作品类型", book.genre],
     ["写作风格", getWritingStyleName(writingStyles, book.writingStyleId) || "AI 自动选择"],
+    ["风格版本", book.writingStyleVersionId ? book.writingStyleVersionId.slice(0, 24) : "未固定版本"],
     ["人称", book.attributes.narrationPerspective],
     ["频道", book.attributes.channel],
     ["主角性别", book.attributes.protagonistGender],
@@ -425,6 +454,25 @@ function BookDetailView({ book, writingStyles, onOpenDocument }: BookDetailViewP
 
   return (
     <section className="book-detail-view">
+      {book.initialization && book.initialization.status !== "completed" ? (
+        <div className={`book-initialization-status ${book.initialization.status}`} role="status" aria-live="polite">
+          <div>
+            <strong>{initializationStatusTitle(book.initialization.status)}</strong>
+            <span>{book.initialization.stage ? initializationStageLabels[book.initialization.stage] ?? book.initialization.stage : "等待后台任务"}</span>
+          </div>
+          {book.initialization.error ? <p>{book.initialization.error}</p> : null}
+          {["failed", "interrupted", "cancelled"].includes(book.initialization.status) ? (
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={retryingInitialization}
+              onClick={onRetryInitialization}
+            >
+              {retryingInitialization ? "正在重试..." : "重试初始化"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <div className="detail-stat-grid">
         <article>
           <span>当前章节</span>
@@ -557,9 +605,19 @@ function BookDetailView({ book, writingStyles, onOpenDocument }: BookDetailViewP
   );
 }
 
+function initializationStatusTitle(status: NonNullable<BookDetail["initialization"]>["status"]) {
+  if (status === "failed") return "AI 初始化失败";
+  if (status === "interrupted") return "AI 初始化已中断";
+  if (status === "cancelled" || status === "cancelling") return "AI 初始化已取消";
+  if (status === "queued") return "AI 初始化排队中";
+  return "AI 正在生成作品信息";
+}
+
 interface CreateBookViewProps {
   draft: BookDraft;
   saving: boolean;
+  worldFileReading: boolean;
+  worldFileError: string;
   writingStyleOptions: ReturnType<typeof createWritingStyleOptions>;
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
   onSave: () => void;
@@ -569,6 +627,8 @@ interface CreateBookViewProps {
 function CreateBookView({
   draft,
   saving,
+  worldFileReading,
+  worldFileError,
   writingStyleOptions,
   onFileChange,
   onSave,
@@ -718,8 +778,14 @@ function CreateBookView({
           </div>
 
           <div className="button-row">
-            <button className="primary-button" type="button" disabled={saving} onClick={onSave}>
-              {saving ? "正在创建作品..." : "创建作品"}
+            <button
+              className="primary-button"
+              type="button"
+              data-loading={saving ? "true" : undefined}
+              disabled={saving || worldFileReading || Boolean(worldFileError)}
+              onClick={onSave}
+            >
+              {saving ? "正在创建作品..." : worldFileReading ? "正在读取世界观..." : "创建作品"}
             </button>
             <button className="ghost-button" type="button" onClick={() => onUpdate(initialDraft)}>
               清空表单
@@ -780,33 +846,6 @@ function BookPreviewView({ draft, writingStyles, onCreateAnother }: BookPreviewV
         继续新建作品
       </button>
     </section>
-  );
-}
-
-interface DocumentModalProps {
-  document: DetailDocument;
-  onClose: () => void;
-}
-
-function DocumentModal({ document, onClose }: DocumentModalProps) {
-  return (
-    <div className="detail-modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="detail-modal" role="dialog" aria-modal="true" aria-label={document.title} onMouseDown={(event) => event.stopPropagation()}>
-        <div className="detail-modal-header">
-          <div>
-            <p className="eyebrow">Markdown Preview</p>
-            <h3>{document.title}</h3>
-            <p>{document.subtitle}</p>
-          </div>
-          <button className="ghost-button" type="button" onClick={onClose}>
-            关闭
-          </button>
-        </div>
-        <div className="detail-modal-body">
-          <MarkdownRenderer content={document.markdown} />
-        </div>
-      </section>
-    </div>
   );
 }
 

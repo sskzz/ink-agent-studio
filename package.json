@@ -3,11 +3,18 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build:contracts": "pnpm --dir packages/contracts build",
     "dev:backend": "pnpm --dir backend dev",
     "dev:studio": "pnpm --dir packages/studio dev",
     "build:backend": "pnpm --dir backend build",
     "build:studio": "pnpm --dir packages/studio build",
+    "build": "pnpm build:contracts && pnpm build:backend && pnpm build:studio",
+    "typecheck:contracts": "pnpm --dir packages/contracts typecheck",
     "typecheck:backend": "pnpm --dir backend typecheck",
-    "typecheck:studio": "pnpm --dir packages/studio typecheck"
+    "typecheck:studio": "pnpm --dir packages/studio typecheck",
+    "typecheck": "pnpm typecheck:contracts && pnpm typecheck:backend && pnpm typecheck:studio",
+    "test:contracts": "pnpm --dir packages/contracts test",
+    "test:backend": "pnpm --dir backend test",
+    "test": "pnpm test:contracts && pnpm test:backend"
   }
 }

@@ -4,12 +4,16 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "pnpm --dir ../contracts build",
     "dev": "vite --host 127.0.0.1 --port 5173",
+    "prebuild": "pnpm --dir ../contracts build",
     "build": "tsc --noEmit && vite build",
+    "pretypecheck": "pnpm --dir ../contracts build",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
     "typecheck": "tsc --noEmit --pretty"
   },
   "dependencies": {
+    "@ink-agent/contracts": "workspace:*",
     "@tanstack/react-query": "^5.81.5",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
