@@ -1,3 +1,4 @@
+// 测试：反 AI 约束编译与本地检测。
 import { describe, expect, it } from "vitest";
 import { compileAntiAiPolicy } from "./antiAiConstraintCompiler.js";
 import { evaluateAntiAiCompliance } from "./antiAiLocalReviewer.js";

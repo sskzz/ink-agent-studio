@@ -1,3 +1,8 @@
+/**
+ * 用户偏好记忆仓储。
+ * 职责：管理 user_preferences 表的持久化与状态机流转（proposed → active/rejected → archived）；
+ * 边界：只做 SQL 存取与状态校验，不包含 Prompt 组装逻辑；批准新偏好时自动归档同键的旧 active 偏好（版本替换语义）。
+ */
 import { randomUUID } from "node:crypto";
 import { userPreferenceSchema, type UserPreference, type UserPreferenceProposalInput } from "@ink-agent/contracts";
 import type { RuntimeDatabase } from "../../runtime/database/runtimeDatabase.js";
@@ -7,10 +12,15 @@ import { estimateTokens } from "../prompts/promptAssembler.js";
 export class PreferenceRepository {
   constructor(private readonly runtimeDatabase: RuntimeDatabase) {}
 
+  /** 数据库连接是否已初始化。 */
   get initialized() {
     return this.runtimeDatabase.initialized;
   }
 
+  /**
+   * 提交偏好提案（status=proposed，等待审批）。
+   * 校验来源 Session/消息引用有效后入库；tokenEstimate 供 Prompt 预算使用。
+   */
   propose(input: UserPreferenceProposalInput) {
     const now = new Date().toISOString();
     const preference: UserPreference = {
@@ -40,12 +50,14 @@ export class PreferenceRepository {
     return preference;
   }
 
+  /** 按 id 读取偏好；不存在时抛 notFound。 */
   get(id: string) {
     const row = this.runtimeDatabase.database.prepare("SELECT * FROM user_preferences WHERE id = ?").get(id);
     if (!row) throw notFound("偏好记忆不存在", { id });
     return mapPreferenceRow(row);
   }
 
+  /** 列表查询：可按状态过滤；按优先级降序、更新时间降序取 limit 条。 */
   list(options: { status?: UserPreference["status"]; limit: number }) {
     if (options.status) {
       return this.runtimeDatabase.database.prepare(
@@ -57,12 +69,18 @@ export class PreferenceRepository {
     ).all(options.limit).map(mapPreferenceRow);
   }
 
+  /**
+   * 批准偏好（proposed → active）。
+   * 同一 key 已有 active 偏好时先归档旧记录，并通过 replaces_preference_id 记录替换关系（保证同一偏好只有一条生效）。
+   * 幂等：已是 active 直接返回。
+   */
   approve(id: string) {
     return this.runtimeDatabase.transaction((database) => {
       const current = readPreference(database, id);
       if (!current) throw notFound("偏好记忆不存在", { id });
       if (current.status === "active") return current;
       if (current.status !== "proposed") throw conflict("只有 proposed 偏好可以批准", { id, status: current.status });
+      // 同一 key 只允许一条 active：先归档旧记录
       const previousRow = database.prepare(
         "SELECT * FROM user_preferences WHERE preference_key = ? AND status = 'active'"
       ).get(current.key);
@@ -81,6 +99,7 @@ export class PreferenceRepository {
     });
   }
 
+  /** 拒绝偏好（proposed → rejected），需提供原因；幂等：已是 rejected 直接返回。 */
   reject(id: string, reason: string) {
     const current = this.get(id);
     if (current.status === "rejected") return current;
@@ -92,6 +111,7 @@ export class PreferenceRepository {
     return this.get(id);
   }
 
+  /** 归档偏好（active → archived，通常由批准新同键偏好触发或手动清理）；幂等处理。 */
   archive(id: string) {
     const current = this.get(id);
     if (current.status === "archived") return current;
@@ -104,6 +124,7 @@ export class PreferenceRepository {
   }
 }
 
+/** 插入偏好记录（全字段 INSERT）。 */
 function insertPreference(database: import("node:sqlite").DatabaseSync, preference: UserPreference) {
   database.prepare(`
     INSERT INTO user_preferences (
@@ -119,6 +140,7 @@ function insertPreference(database: import("node:sqlite").DatabaseSync, preferen
   );
 }
 
+/** 引用完整性校验：提案必须指向真实存在的 Session；带消息时必须同属该 Session，防止跨会话伪造来源。 */
 function assertSourceReferences(database: import("node:sqlite").DatabaseSync, sessionId: string | null, messageId: string | null) {
   if (sessionId && !database.prepare("SELECT id FROM sessions WHERE id = ?").get(sessionId)) {
     throw notFound("来源 Session 不存在", { sessionId });
@@ -139,6 +161,7 @@ function readPreference(database: import("node:sqlite").DatabaseSync, id: string
   return row ? mapPreferenceRow(row) : null;
 }
 
+/** 行 → 实体映射：snake_case 转 camelCase 并按 schema 校验，保证非法行数据在读取边界被拦截。 */
 function mapPreferenceRow(row: Record<string, unknown>) {
   return userPreferenceSchema.parse({
     schemaVersion: row.schema_version,

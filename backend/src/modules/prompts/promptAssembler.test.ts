@@ -1,3 +1,4 @@
+// 测试文件：PromptAssembler 的预算约束、当前指令保留与哈希稳定性。
 import { describe, expect, it } from "vitest";
 import { PromptAssembler } from "./promptAssembler.js";
 

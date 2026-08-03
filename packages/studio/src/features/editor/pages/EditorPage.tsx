@@ -1,3 +1,8 @@
+/**
+ * 继续写作页（章节编辑器壳）：三栏布局（作品导航 / 内容面板 / AI 辅助）。
+ * 作品详情从路由 state 的 fromBookId 加载；左侧导航树按 tab 分组，
+ * 由作品数据动态生成（createBookAwareNavigation），暂未接入章节正文真实接口。
+ */
 import type { LucideIcon } from "lucide-react";
 import { Archive, ArrowLeft, BookOpenText, ChevronLeft, ChevronRight, CircleDotDashed, Eye, FileText, Flag, FolderOpen, Layers3, ListTree, MapPin, Package, Plus, Settings2, Tags, UserRound, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -10,22 +15,26 @@ import type { EditorField, EditorNavGroup, EditorNavItem } from "@/features/edit
 
 type EditorTab = "info" | "chapters" | "drafts";
 type AssistantTab = "chat" | "inspiration";
+/** 路由 state：从作品详情“继续写作”进入时携带来源作品 id。 */
 interface EditorRouteState {
   fromBookId?: string;
 }
 
+/** 左侧顶部 tab 定义：作品信息 / 正文 / 草稿。 */
 const editorTabs: Array<{ id: EditorTab; label: string }> = [
   { id: "info", label: "作品信息" },
   { id: "chapters", label: "正文" },
   { id: "drafts", label: "草稿" }
 ];
 
+/** 切换 tab 时的默认选中项（各 tab 的占位条目 id）。 */
 const defaultItemByTab: Record<EditorTab, string> = {
   info: "basic-settings",
   chapters: "chapter-plan",
   drafts: "draft-empty"
 };
 
+/** 不在作品数据中的特殊导航项：角色管理与“新增势力/地点/物品”入口（暂为页面结构）。 */
 const specialEditorItems: Record<string, EditorNavItem> = {
   "manage-characters": {
     icon: UsersRound,
@@ -66,14 +75,17 @@ const specialEditorItems: Record<string, EditorNavItem> = {
   }
 };
 
+/** 展平导航分组，便于在当前 tab 的条目中查找激活项。 */
 function flattenGroups(groups: EditorNavGroup[]) {
   return groups.flatMap((group) => group.items);
 }
 
+/** 数字千分位格式化，用于字数展示。 */
 function formatNumber(value: number) {
   return new Intl.NumberFormat("zh-CN").format(value);
 }
 
+/** 核心文件 → 导航项：以详情面板展示文件名、摘要与 markdown 正文。 */
 function createFileNavItem(file: WorkspaceBookDetail["coreFiles"][number], icon: LucideIcon): EditorNavItem {
   return {
     fields: [
@@ -90,6 +102,7 @@ function createFileNavItem(file: WorkspaceBookDetail["coreFiles"][number], icon:
   };
 }
 
+/** 势力/地点/物品 → 导航项：实体为空时生成占位空态条目。 */
 function createEntityNavItems(
   entities: WorkspaceBookDetail["factions"],
   icon: LucideIcon,
@@ -121,6 +134,7 @@ function createEntityNavItems(
   }));
 }
 
+/** 依据作品详情动态生成三个 tab 的完整导航树（含空态与占位条目）。 */
 function createBookAwareNavigation(book: WorkspaceBookDetail): Record<EditorTab, EditorNavGroup[]> {
   const outlineFile = book.coreFiles.find((file) => file.id === "outline");
   const briefFile = book.coreFiles.find((file) => file.id === "brief");
@@ -351,10 +365,7 @@ function createBookAwareNavigation(book: WorkspaceBookDetail): Record<EditorTab,
   };
 }
 
-/**
- * 继续写作页面。
- * 当前阶段保留编辑器页面结构，顶部作品状态和基础设置会读取来源作品详情。
- */
+/** 继续写作页主组件：加载来源作品详情并组装编辑器三栏视图。 */
 export function EditorPage() {
   const location = useLocation();
   const [activeTab, setActiveTab] = useState<EditorTab>("info");
@@ -371,6 +382,7 @@ export function EditorPage() {
   const backBookId = routeState?.fromBookId ?? "";
   const backLinkState = backBookId ? { bookId: backBookId, view: "detail" } : undefined;
 
+  // 卸载时清理滚动条显隐的延时器，避免组件销毁后仍触发 setState。
   useEffect(() => {
     return () => {
       if (scrollbarTimerRef.current !== null) {
@@ -379,6 +391,7 @@ export function EditorPage() {
     };
   }, []);
 
+  // 根据路由 state 的来源作品 id 拉取详情；无 id 时给出引导提示。
   useEffect(() => {
     let ignore = false;
 
@@ -418,6 +431,7 @@ export function EditorPage() {
     };
   }, [backBookId]);
 
+  /** 鼠标移动/滚动时短暂显示滚动条，900ms 后自动隐藏。 */
   function revealScrollbar() {
     setIsScrollbarVisible(true);
 
@@ -430,11 +444,13 @@ export function EditorPage() {
     }, 900);
   }
 
+  /** 切换顶部 tab：同时重置该 tab 的默认选中项。 */
   function switchTab(tab: EditorTab) {
     setActiveTab(tab);
     setActiveItemId(defaultItemByTab[tab]);
   }
 
+  // 作品未加载完成时的占位视图：仅展示退出链接与加载/空状态说明。
   if (isBookLoading || !bookDetail) {
     return (
       <div className="page novel-editor-page">
@@ -482,6 +498,7 @@ export function EditorPage() {
     );
   }
 
+  // 当前激活项：优先当前 tab 列表内匹配，其次特殊条目，最后回退首个条目。
   const navigation = createBookAwareNavigation(bookDetail);
   const currentGroups = navigation[activeTab];
   const currentItems = flattenGroups(currentGroups);
@@ -608,6 +625,7 @@ export function EditorPage() {
   );
 }
 
+/** 异常归一为可展示的错误文案。 */
 function toMessage(error: unknown) {
   return error instanceof Error ? error.message : "未知错误";
 }

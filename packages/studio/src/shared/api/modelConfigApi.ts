@@ -1,3 +1,7 @@
+/**
+ * 模型配置 API：列表/增删改查、默认模型、用途分配、连通性测试与分析报告。
+ * 安全约定：API Key 只在提交/测试时传给后端，任何读取接口都不会回显真实密钥。
+ */
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/shared/api/http";
 import type {
   ModelAnalysis,
@@ -27,6 +31,7 @@ function normalizeModelConfig(config: BackendModelConfig): ModelConfig {
   };
 }
 
+/** 后端用途分配接口可能缺字段，统一归并为空值 null，保持前端类型稳定。 */
 function normalizeUsage(routes: BackendModelRoutes): ModelUsageSettings {
   return {
     writingModelId: routes.writingModelId ?? null,
@@ -35,6 +40,7 @@ function normalizeUsage(routes: BackendModelRoutes): ModelUsageSettings {
   };
 }
 
+/** 校验测试连接前的必填项（名称 / Base URL / 模型名），缺失时返回字段中文名列表。 */
 function getMissingFields(draft: ModelConfigDraft) {
   return [
     !draft.name.trim() && "配置名称",
@@ -64,6 +70,7 @@ export async function saveModelConfig(draft: ModelConfigDraft): Promise<ModelCon
   return normalizeModelConfig(saved);
 }
 
+/** 删除一条模型配置；同时清理其在用途分配中的引用由后端完成。 */
 export async function deleteModelConfig(id: string): Promise<void> {
   await apiDelete<{ id: string }>(`/model-configs/${id}`);
 }
@@ -77,15 +84,18 @@ export async function setDefaultModelConfig(id: string): Promise<ModelConfig[]> 
   return configs.map(normalizeModelConfig);
 }
 
+/** 读取规划/写作/审稿三条调用链路的模型分配。 */
 export async function getModelUsageSettings(): Promise<ModelUsageSettings> {
   const routes = await apiGet<BackendModelRoutes>("/model-routes");
   return normalizeUsage(routes);
 }
 
+/** 模型配置体检报告：由后端汇总配置与链路状态生成，页面只负责展示。 */
 export async function getModelAnalysis(): Promise<ModelAnalysis> {
   return apiGet<ModelAnalysis>("/model-analysis");
 }
 
+/** 请求服务商列出可用模型：用于表单中的模型名下拉；失败由调用方兜底提示。 */
 export async function discoverAvailableModels(draft: ModelConfigDraft): Promise<string[]> {
   const result = await apiPost<{ models: string[]; fetchedAt: string }>("/model-configs/discover-models", {
     id: draft.id,

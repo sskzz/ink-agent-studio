@@ -1,3 +1,8 @@
+/**
+ * 写作风格页：列表 / 新增 / 详情三种视图切换。
+ * 列表来自后端本地风格库；新增流程为“选模板 → AI 分析预览 → 确认保存”，
+ * 详情支持样本管理、重建版本与版本激活。页面状态集中在组件内，未使用全局 store。
+ */
 import { useEffect, useState } from "react";
 import type { ChangeEvent } from "react";
 import { Badge } from "@/shared/components/ui/Badge";
@@ -21,13 +26,9 @@ import type { WritingStyleSampleDto, WritingStyleVersionDto } from "@/features/w
 type StyleView = "list" | "create" | "detail";
 
 /**
- * 写作风格页。
- *
- * 当前版本已接入后端本地风格库：
- * - 风格列表读取 /api/v1/writing-styles，后端为空时展示空状态。
- * - 新增风格支持读取首个模板文件内容并请求 /api/v1/writing-styles/analyze 生成分析预览。
- * - 用户确认后点击“保存风格”才会调用 /api/v1/writing-styles 持久化。
- * - 风格详情展示分析摘要、来源文件和提示词片段。
+ * 写作风格页主组件：管理列表/新增/详情三视图的状态流转。
+ * 交互要点：新增时先收集模板文本再调后端 analyze 生成预览，确认后才保存；
+ * 详情页的样本与版本数据在进入详情视图时加载。
  */
 export function WritingStylesPage() {
   const [view, setView] = useState<StyleView>("list");
@@ -50,6 +51,7 @@ export function WritingStylesPage() {
   const fileCount = styles.reduce((total, style) => total + style.sourceFiles.length, 0);
   const analyzedCount = styles.filter((style) => style.analysis.parameters.length > 0).length;
 
+  // 初始加载风格列表：ignore 标记避免组件卸载后仍 setState（严格模式双调用安全）。
   useEffect(() => {
     let ignore = false;
 
@@ -82,7 +84,9 @@ export function WritingStylesPage() {
     };
   }, []);
 
+  // 进入详情视图时并行加载样本与版本数据，供样式资产管理面板使用。
   useEffect(() => {
+    // 非详情视图或无选中风格时跳过加载。
     if (view !== "detail" || !selectedStyle) return;
     let ignore = false;
     setManagingStyle(true);
@@ -102,6 +106,7 @@ export function WritingStylesPage() {
     return () => { ignore = true; };
   }, [view, selectedStyle?.id]);
 
+  /** 清空表单后切到新增视图，保证每次进入都是空白起点。 */
   function openCreateView() {
     setStyleName("");
     setStyleNote("");
@@ -112,12 +117,14 @@ export function WritingStylesPage() {
     setView("create");
   }
 
+  /** 从列表卡片进入详情：记录选中 id 并切换视图。 */
   function openDetailView(style: WritingStyle) {
     setSelectedId(style.id);
     setFeedback("");
     setView("detail");
   }
 
+  /** 选择模板文件：记录文件名，并读取首个文件内容作为 AI 分析输入。 */
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     const names = files.map((file) => file.name);
@@ -139,6 +146,10 @@ export function WritingStylesPage() {
     }
   }
 
+  /**
+   * 触发 AI 分析：输入缺省（无文件、无名称说明）时拦截并提示；
+   * 成功后用分析结果回填风格名称与说明，供用户确认后保存。
+   */
   async function analyzeStyle() {
     const content = sampleContent || styleNote || styleName;
 
@@ -170,6 +181,7 @@ export function WritingStylesPage() {
     }
   }
 
+  /** 保存风格：必须已有分析结果才允许保存；保存后同步首个样本文件并刷新列表。 */
   async function saveStyle() {
     const trimmedName = styleName.trim();
     if (!analysisResult) {
@@ -209,12 +221,14 @@ export function WritingStylesPage() {
     }
   }
 
+  /** 复制提示词片段到剪贴板：API 不可用时静默失败，不阻塞页面。 */
   function copyPromptSnippet(snippet: string) {
     // 浏览器不允许时也不阻塞页面，真实版本可接入统一 Toast 组件提示复制结果。
     void navigator.clipboard?.writeText(snippet);
     setFeedback("提示词片段已复制到剪贴板。");
   }
 
+  /** 为当前风格新增本地样本文件，并刷新样本与风格列表。 */
   async function addSampleFile(file: File) {
     if (!selectedStyle) return;
     setManagingStyle(true);
@@ -234,6 +248,7 @@ export function WritingStylesPage() {
     }
   }
 
+  /** 删除样本：从下一版本的聚合集合中剔除该文件。 */
   async function removeSample(sampleId: string) {
     if (!selectedStyle) return;
     setManagingStyle(true);
@@ -253,6 +268,7 @@ export function WritingStylesPage() {
     }
   }
 
+  /** 用全部样本重建风格：生成新的不可变版本，同时刷新版本列表。 */
   async function rebuildSelectedStyle() {
     if (!selectedStyle) return;
     setManagingStyle(true);
@@ -269,6 +285,7 @@ export function WritingStylesPage() {
     }
   }
 
+  /** 激活指定版本：只影响后续作品引用，已引用旧版本的作品不受影响。 */
   async function activateVersion(versionId: string) {
     if (!selectedStyle) return;
     setManagingStyle(true);
@@ -361,6 +378,7 @@ export function WritingStylesPage() {
   );
 }
 
+/** 从分析结果中提取自动生成的风格名与说明：优先取原始分析中的 dominantStyle，否则取首个参数值。 */
 function getGeneratedStyleMeta(analysis: AnalysisResult) {
   const rawAnalysis = analysis.rawAnalysis;
 
@@ -393,6 +411,7 @@ interface StyleListViewProps {
   onOpenDetail: (style: WritingStyle) => void;
 }
 
+/** 风格列表视图：卡片展示摘要与指标，点击卡片进入详情。 */
 function StyleListView({ styles, selectedId, onOpenDetail }: StyleListViewProps) {
   return (
     <section className="style-list-view">
@@ -474,6 +493,7 @@ interface StyleCreateViewProps {
   onStyleNoteChange: (value: string) => void;
 }
 
+/** 新增风格视图：名称/说明表单 + 模板采集 + AI 分析/保存操作，右侧实时预览分析结果。 */
 function StyleCreateView({
   analysisResult,
   analyzing,
@@ -487,6 +507,7 @@ function StyleCreateView({
   onStyleNameChange,
   onStyleNoteChange
 }: StyleCreateViewProps) {
+  // 有文件、名称或说明任一输入即可触发分析。
   const canAnalyze =
     selectedFiles.length > 0 ||
     styleName.trim().length > 0 ||
@@ -576,6 +597,7 @@ function StyleCreateView({
   );
 }
 
+/** 把任意 unknown 异常归一为可展示的错误文案。 */
 function toMessage(error: unknown) {
   return error instanceof Error ? error.message : "未知错误";
 }

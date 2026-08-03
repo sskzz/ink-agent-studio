@@ -1,3 +1,4 @@
+// 章节风格约束端到端测试：风格注入写作/审稿/润色提示词、过期 styleId 拒绝、非合规草稿自动修订。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

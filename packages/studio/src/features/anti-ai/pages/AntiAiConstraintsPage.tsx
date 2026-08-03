@@ -1,3 +1,7 @@
+/**
+ * 去 AI 味约束页：展示全局规则集状态、按分类筛选规则表与协作说明。
+ * 数据来自后端规则集（只读），页面不做任何写操作。
+ */
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Fingerprint, ShieldCheck } from "lucide-react";
 import {
@@ -9,6 +13,7 @@ import { PageHeader } from "@/shared/components/ui/PageHeader";
 
 type CategoryFilter = "all" | AntiAiCategory;
 
+/** 分类筛选 → 中文标签（"all" 表示全部）。 */
 const categoryLabels: Record<CategoryFilter, string> = {
   all: "全部",
   structure: "结构",
@@ -20,14 +25,17 @@ const categoryLabels: Record<CategoryFilter, string> = {
   rhythm: "节奏"
 };
 
+/** 约束适用阶段 → 中文标签。 */
 const stageLabels = { generation: "写作", review: "审稿", polish: "润色" } as const;
 
+/** 去 AI 味约束页主组件：加载规则集并用分类筛选规则。 */
 export function AntiAiConstraintsPage() {
   const [overview, setOverview] = useState<AntiAiConstraintOverview | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<CategoryFilter>("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // 挂载时拉取规则集一次；ignore 标记防止卸载后 setState。
   useEffect(() => {
     let ignore = false;
     setLoading(true);
@@ -46,6 +54,7 @@ export function AntiAiConstraintsPage() {
     };
   }, []);
 
+  // 规则按当前分类筛选；"all" 时展示全部规则。
   const visibleRules = useMemo(
     () => overview?.rules.filter((rule) => selectedCategory === "all" || rule.category === selectedCategory) ?? [],
     [overview, selectedCategory]
@@ -170,6 +179,7 @@ export function AntiAiConstraintsPage() {
   );
 }
 
+/** 严重级别 → 中文标签：高 / 中 / 低。 */
 function severityLabel(severity: "low" | "medium" | "high") {
   return severity === "high" ? "高" : severity === "medium" ? "中" : "低";
 }

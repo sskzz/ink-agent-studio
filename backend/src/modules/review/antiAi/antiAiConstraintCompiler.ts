@@ -1,3 +1,9 @@
+/**
+ * 反 AI 约束编译器。
+ * 职责：把全局规则（基线）与风格规则（按 canonicalKey 覆盖/新增）合并成一份生效的反 AI 策略，
+ * 产出生成/审稿 Prompt、结构化约束与内容寻址的 constraintHash；
+ * 边界：纯函数不访问磁盘；guard 级全局规则不可被风格规则放宽；同义规则只保留一条（语义去重）。
+ */
 import { createHash } from "node:crypto";
 import type { SceneType } from "../../../schemas/styleVersionSchemas.js";
 import type { GenerationConstraint } from "../../constraints/constraintResolver.js";
@@ -10,6 +16,7 @@ import {
   type AntiAiSeverity
 } from "./antiAiRuleRegistry.js";
 
+/** 风格反 AI 规则输入（来自 V4 语义画像或旧版 analysis.antiAiRules），mode 决定覆盖方式。 */
 export interface StyleAntiAiRuleInput {
   id?: string;
   canonicalKey?: string;
@@ -21,12 +28,14 @@ export interface StyleAntiAiRuleInput {
   severity: AntiAiSeverity;
 }
 
+/** 生效规则：origin 标识来源（全局/风格/合并），mode 标识覆盖方式。 */
 export interface EffectiveAntiAiRule extends AntiAiRule {
   origin: "global" | "style" | "merged";
   styleRuleId: string | null;
   mode: "inherit" | "tighten" | "relax" | "supplement";
 }
 
+/** 编译产物：Prompt 文本、结构化约束、生效规则、去重数与警告。 */
 export interface CompiledAntiAiPolicy {
   ruleSetVersion: string;
   constraintHash: string;
@@ -40,8 +49,12 @@ export interface CompiledAntiAiPolicy {
 }
 
 /**
+ * 编译反 AI 策略。
  * 全局规则始终作为基线。风格规则先映射到 canonicalKey，再覆盖同键规则的表达和阈值，
  * 因此写作 Prompt 中不会同时出现两条语义相同的去 AI 味要求。
+ * @param input.sceneType 场景类型（用于策略差异与哈希）
+ * @param input.styleRules 风格规则（可选）
+ * @returns 编译后的策略；风格规则尝试放宽 guard 规则时被忽略并记录警告
  */
 export function compileAntiAiPolicy(input: { sceneType: SceneType; styleRules?: StyleAntiAiRuleInput[] }): CompiledAntiAiPolicy {
   const globalRules = getAntiAiRuleSet().rules;
@@ -54,12 +67,14 @@ export function compileAntiAiPolicy(input: { sceneType: SceneType; styleRules?: 
   for (const [index, rawStyleRule] of (input.styleRules ?? []).entries()) {
     const rule = normalizeStyleRule(rawStyleRule, index);
     const existing = effective.get(rule.canonicalKey);
+    // 无同键全局规则：作为补充规则新增（不影响其他规则的语义）
     if (!existing) {
       effective.set(rule.canonicalKey, createSupplementRule(rule));
       continue;
     }
 
     deduplicatedCount += 1;
+    // 安全边界：guard 规则是红线，风格规则不允许 relax 放宽
     if (existing.level === "guard" && rule.mode === "relax") {
       warnings.push(`风格规则 ${rule.id} 尝试放宽不可变规则 ${existing.id}，已忽略。`);
       continue;
@@ -67,7 +82,9 @@ export function compileAntiAiPolicy(input: { sceneType: SceneType; styleRules?: 
     effective.set(rule.canonicalKey, mergeRule(existing, rule));
   }
 
+  // guard 规则优先排前（先进入受限预算的 Prompt），同级按严重度降序
   const ordered = [...effective.values()].sort(compareEffectiveRules);
+  // 生成 Prompt 预算 480 字符：先放规则正文，命中预算的规则才进入审稿 Prompt 与结构化约束
   const generation = compactRules(ordered, (rule) => rule.promptClause, 480);
   const selectedIds = new Set(generation.includedIds);
   const selectedRules = ordered.filter((rule) => selectedIds.has(rule.id));
@@ -85,6 +102,7 @@ export function compileAntiAiPolicy(input: { sceneType: SceneType; styleRules?: 
     text: rule.promptClause
   }));
   const hashCore = {
+    // 哈希覆盖规则集版本、场景与最终生效的规则内容：任一变化都会产生新 constraintHash
     ruleSetVersion: ANTI_AI_RULESET_VERSION,
     sceneType: input.sceneType,
     rules: selectedRules.map((rule) => ({ id: rule.id, canonicalKey: rule.canonicalKey, promptClause: rule.promptClause, mode: rule.mode }))
@@ -103,6 +121,7 @@ export function compileAntiAiPolicy(input: { sceneType: SceneType; styleRules?: 
   };
 }
 
+/** 规范化风格规则输入：消毒文本、推断缺失的 category/canonicalKey/mode，避免脏数据进入 Prompt。 */
 function normalizeStyleRule(raw: StyleAntiAiRuleInput, index: number) {
   const rule = sanitizeStyleConstraint(raw.rule);
   const detectHint = sanitizeStyleConstraint(raw.detectHint ?? "") || "按该风格规则检查机械化表达";
@@ -120,7 +139,12 @@ function normalizeStyleRule(raw: StyleAntiAiRuleInput, index: number) {
   };
 }
 
+/**
+ * 合并规则：风格规则接管非 guard 规则的文本与阈值（relax 会同时降低严重度）；
+ * guard 规则保留原文、只做文本追加（不得被风格规则改写）。
+ */
 function mergeRule(existing: EffectiveAntiAiRule, styleRule: ReturnType<typeof normalizeStyleRule>): EffectiveAntiAiRule {
+  // supplement 语义是补充说明，覆盖效果按 tighten 处理
   const mode = styleRule.mode === "supplement" ? "tighten" : styleRule.mode;
   const preserveGuard = existing.level === "guard";
   return {
@@ -136,12 +160,14 @@ function mergeRule(existing: EffectiveAntiAiRule, styleRule: ReturnType<typeof n
   };
 }
 
+/** 合并两段文本：去重后以中文分号连接，顺序为 基线；追加。 */
 function combineRuleText(base: string, addition: string) {
   if (!addition || base.includes(addition)) return base;
   if (addition.includes(base)) return addition;
   return `${base}；${addition}`;
 }
 
+/** 为无同键全局规则的风格规则创建补充规则（baseline 级，可在各阶段生效）。 */
 function createSupplementRule(styleRule: ReturnType<typeof normalizeStyleRule>): EffectiveAntiAiRule {
   return {
     id: styleRule.id,
@@ -161,6 +187,7 @@ function createSupplementRule(styleRule: ReturnType<typeof normalizeStyleRule>):
   };
 }
 
+/** 从规则文本推断 canonicalKey：命中已知语义短语用全局键，否则用类别 + 文本指纹生成唯一键（保持幂等）。 */
 function inferCanonicalKey(category: AntiAiCategory, text: string) {
   if (/段尾|总结|收束/u.test(text)) return "structure.paragraph-summary";
   if (/心理|情绪|感受|因果/u.test(text)) return "emotion.over-explained";
@@ -173,6 +200,7 @@ function inferCanonicalKey(category: AntiAiCategory, text: string) {
   return `style.${category}.${fingerprint}`;
 }
 
+/** 按文本关键词推断规则类别；无命中时归入 language。 */
 function inferCategory(text: string): AntiAiCategory {
   if (/对白|台词|说话/u.test(text)) return "dialogue";
   if (/情绪|心理|感受/u.test(text)) return "emotion";
@@ -183,6 +211,7 @@ function inferCategory(text: string): AntiAiCategory {
   return "language";
 }
 
+/** 严重度合并：relax 取两者较低、tighten 取两者较高。 */
 function mergeSeverity(base: AntiAiSeverity, style: AntiAiSeverity, mode: "tighten" | "relax") {
   const levels: AntiAiSeverity[] = ["low", "medium", "high"];
   const baseIndex = levels.indexOf(base);
@@ -190,6 +219,7 @@ function mergeSeverity(base: AntiAiSeverity, style: AntiAiSeverity, mode: "tight
   return levels[mode === "relax" ? Math.min(baseIndex, styleIndex) : Math.max(baseIndex, styleIndex)]!;
 }
 
+/** 排序：guard 优先 → 严重度高优先 → 按 id 稳定排序。 */
 function compareEffectiveRules(left: EffectiveAntiAiRule, right: EffectiveAntiAiRule) {
   const level = Number(right.level === "guard") - Number(left.level === "guard");
   if (level) return level;
@@ -197,6 +227,7 @@ function compareEffectiveRules(left: EffectiveAntiAiRule, right: EffectiveAntiAi
   return severity[right.severity] - severity[left.severity] || left.id.localeCompare(right.id);
 }
 
+/** 预算内压缩：去重 + 超长跳过（不截断），保证输出严格不超过 limit；返回被选中的规则 id。 */
 function compactRules(rules: EffectiveAntiAiRule[], render: (rule: EffectiveAntiAiRule) => string, limit: number) {
   let text = "";
   const includedIds: string[] = [];

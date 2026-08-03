@@ -1,3 +1,7 @@
+/**
+ * 偏好记忆页：待审批偏好的创建/审批/拒绝/归档 + 实际注入 Prompt 的实时预览。
+ * 偏好必须经用户明确批准才会进入模型上下文；页面右上可随时刷新同步后端。
+ */
 import type {
   UserMemorySelection,
   UserPreference,
@@ -16,6 +20,7 @@ import {
 import { Badge } from "@/shared/components/ui/Badge";
 import { PageHeader } from "@/shared/components/ui/PageHeader";
 
+/** 状态筛选标签：all 表示不过滤。 */
 const statusOptions: Array<{ value: "all" | UserPreference["status"]; label: string }> = [
   { value: "all", label: "全部" },
   { value: "proposed", label: "待审批" },
@@ -24,6 +29,7 @@ const statusOptions: Array<{ value: "all" | UserPreference["status"]; label: str
   { value: "rejected", label: "已拒绝" }
 ];
 
+/** 偏好状态 → 中文标签。 */
 const statusLabels: Record<UserPreference["status"], string> = {
   proposed: "待审批",
   active: "已启用",
@@ -31,6 +37,7 @@ const statusLabels: Record<UserPreference["status"], string> = {
   rejected: "已拒绝"
 };
 
+/** 偏好键 → 中文标签：与后端契约的 key 枚举一一对应。 */
 const keyLabels: Record<UserPreference["key"], string> = {
   narrative_pacing: "叙事节奏",
   paragraph_length: "段落长度",
@@ -44,6 +51,7 @@ const keyLabels: Record<UserPreference["key"], string> = {
   interaction_style: "协作方式"
 };
 
+/** 偏好类别 → 中文标签。 */
 const categoryLabels: Record<UserPreference["category"], string> = {
   writing: "写作",
   review: "审稿",
@@ -51,6 +59,7 @@ const categoryLabels: Record<UserPreference["category"], string> = {
   formatting: "格式"
 };
 
+/** 新建提议表单的初始值：默认写作类 + 叙事节奏，优先级取中间值。 */
 const initialProposal: UserPreferenceProposalInput = {
   category: "writing",
   key: "narrative_pacing",
@@ -61,24 +70,29 @@ const initialProposal: UserPreferenceProposalInput = {
   sourceMessageId: null
 };
 
+/** 偏好记忆页主组件：列表筛选、提议表单与审批动作都集中于此。 */
 export function MemoryPage() {
   const [preferences, setPreferences] = useState<UserPreference[]>([]);
   const [preview, setPreview] = useState<UserMemorySelection | null>(null);
   const [filter, setFilter] = useState<"all" | UserPreference["status"]>("all");
   const [proposal, setProposal] = useState<UserPreferenceProposalInput>(initialProposal);
   const [showForm, setShowForm] = useState(false);
+  // busy 为 null 时空闲；"load" 表示全量加载中；否则为正在操作的偏好 id。
   const [busy, setBusy] = useState<string | null>("load");
   const [message, setMessage] = useState("");
 
+  // 挂载即加载偏好列表与 Prompt 预览。
   useEffect(() => {
     void reload();
   }, []);
 
+  // 筛选只作用于内存中的偏好数组，不做额外请求。
   const filtered = useMemo(
     () => filter === "all" ? preferences : preferences.filter((item) => item.status === filter),
     [filter, preferences]
   );
 
+  /** 全量刷新：偏好列表与 Prompt 预览并行拉取。 */
   async function reload() {
     setBusy("load");
     setMessage("");
@@ -93,6 +107,7 @@ export function MemoryPage() {
     }
   }
 
+  /** 提交新提议：成功后将新条目插入列表头部并切到“待审批”筛选，让用户看到成果。 */
   async function submitProposal(event: React.FormEvent) {
     event.preventDefault();
     setBusy("proposal");
@@ -111,21 +126,25 @@ export function MemoryPage() {
     }
   }
 
+  /** 批准偏好：通过后该偏好进入后续 Prompt 注入。 */
   async function approve(item: UserPreference) {
     await mutate(item.id, () => approvePreference(item.id), "偏好已批准并进入后续 Prompt。");
   }
 
+  /** 拒绝偏好：弹窗收集拒绝原因；取消输入则不执行操作。 */
   async function reject(item: UserPreference) {
     const reason = window.prompt("请输入拒绝原因（将单独保存，不会改写原提议理由）：");
     if (!reason?.trim()) return;
     await mutate(item.id, () => rejectPreference(item.id, reason.trim()), "偏好提议已拒绝。");
   }
 
+  /** 归档偏好：需用户确认；归档后不再进入 Prompt 但保留历史。 */
   async function archive(item: UserPreference) {
     if (!window.confirm(`确认归档“${keyLabels[item.key]}”偏好？归档后不会再进入 Prompt。`)) return;
     await mutate(item.id, () => archivePreference(item.id), "偏好已归档并从 Prompt 移除。");
   }
 
+  /** 审批/归档的通用流程：执行操作 → 原位替换列表条目 → 刷新 Prompt 预览。 */
   async function mutate(id: string, operation: () => Promise<UserPreference>, successMessage: string) {
     setBusy(id);
     setMessage("");
@@ -246,6 +265,7 @@ export function MemoryPage() {
   );
 }
 
+/** 偏好状态 → 徽章配色：启用绿 / 待审批琥珀 / 归档蓝 / 拒绝玫红。 */
 function statusTone(status: UserPreference["status"]): "sage" | "amber" | "blue" | "rose" {
   if (status === "active") return "sage";
   if (status === "proposed") return "amber";
@@ -253,10 +273,12 @@ function statusTone(status: UserPreference["status"]): "sage" | "amber" | "blue"
   return "rose";
 }
 
+/** 时间戳格式化为中文中格式（含日期与时间）。 */
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
 
+/** 异常归一为可展示的错误文案。 */
 function toErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "偏好记忆操作失败";
 }

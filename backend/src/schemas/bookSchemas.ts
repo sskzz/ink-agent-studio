@@ -1,7 +1,17 @@
 import { z } from "zod";
 
+/**
+ * 作品相关 Zod schema。
+ * 输入 schema 用于接口入参解析（带默认值，容忍前端少传字段）；Record schema 用于校验落盘 JSON。
+ */
+
+/** 作品状态枚举。 */
 export const bookStatusSchema = z.enum(["planning", "drafting", "reviewing", "paused"]);
 
+/**
+ * 创建/更新作品的入参 schema。
+ * 所有字段都有默认值或可空，前端可以先提交最小字段，再由 AI 初始化补齐设定。
+ */
 export const bookDraftInputSchema = z.object({
   title: z.string().trim().optional().default(""),
   genre: z.string().trim().optional().default(""),
@@ -44,6 +54,7 @@ export const bookRecordSchema = z.object({
   updatedAt: z.string()
 });
 
+/** books/{bookId}/book.json 数组索引结构。 */
 export const booksIndexSchema = z.array(bookRecordSchema);
 
 export type BookDraftInput = z.infer<typeof bookDraftInputSchema>;

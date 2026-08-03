@@ -2,6 +2,11 @@ import path from "node:path";
 import { badRequest } from "./errors.js";
 
 /**
+ * 工作区路径安全工具。
+ * 所有来自用户的文件名、fileId、相对路径必须经过这里解析，防止路径穿越写出工作区。
+ */
+
+/**
  * 安全解析工作区内路径。
  * 所有用户传入的文件名、fileId、相对路径都必须走这里，防止 `../` 路径穿越写到项目外部。
  */

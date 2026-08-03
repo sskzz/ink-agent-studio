@@ -1,3 +1,4 @@
+// 测试文件：工具注册表的注册、列表与入参校验。
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ToolRegistry } from "./toolRegistry.js";

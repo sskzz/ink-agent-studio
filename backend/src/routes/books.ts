@@ -15,14 +15,25 @@ import {
   toInitializationDto
 } from "./bookInitialization.js";
 
+/**
+ * 作品 CRUD 路由工厂。
+ * 创建作品后会自动入队 AI 初始化；删除作品前会先取消该作品未完成的初始化 Run。
+ */
 export function createBooksRoute(services: ApplicationServices) {
   const route = new Hono();
 
+  /**
+   * GET /api/v1/books：作品列表（摘要）。
+   */
   route.get("/books", async (context) => {
     const books = await listBookSummaries(services.paths);
     return jsonOk(context, books);
   });
 
+  /**
+   * POST /api/v1/books：创建作品（入参校验失败 → 400）。
+   * 数据库已初始化时自动入队 AI 初始化；入队失败则回滚删除刚创建的作品，避免残留半成品。
+   */
   route.post("/books", async (context) => {
     const body = await context.req.json();
     const detail = await createBook(services.paths, body);
@@ -51,17 +62,27 @@ export function createBooksRoute(services: ApplicationServices) {
     );
   });
 
+  /**
+   * GET /api/v1/books/:bookId：作品详情（含最近一次初始化状态）。不存在 → 404。
+   */
   route.get("/books/:bookId", async (context) => {
     const bookId = context.req.param("bookId");
     const detail = await getBookDetail(services.paths, bookId);
     return jsonOk(context, { ...detail, initialization: latestBookInitialization(services, bookId) });
   });
 
+  /**
+   * PATCH /api/v1/books/:bookId：更新作品设定。
+   */
   route.patch("/books/:bookId", async (context) => {
     const detail = await updateBook(services.paths, context.req.param("bookId"), await context.req.json());
     return jsonOk(context, detail, "作品已更新");
   });
 
+  /**
+   * POST /api/v1/books/:bookId/writing-style/upgrade
+   * 把作品固定到指定（或最新可用）写作风格版本。body 可省略，缺省升级到最新版本。
+   */
   route.post("/books/:bookId/writing-style/upgrade", async (context) => {
     const body = (await context.req.json().catch(() => ({}))) as { versionId?: string | null };
     return jsonOk(
@@ -71,6 +92,10 @@ export function createBooksRoute(services: ApplicationServices) {
     );
   });
 
+  /**
+   * DELETE /api/v1/books/:bookId：删除作品。
+   * 先取消该作品所有进行中的初始化 Run（避免删除后 Run 继续写已不存在的目录），再删除磁盘数据。
+   */
   route.delete("/books/:bookId", async (context) => {
     const bookId = context.req.param("bookId");
     if (services.runtimeDatabase.initialized) {

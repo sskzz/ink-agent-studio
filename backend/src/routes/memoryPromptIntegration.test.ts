@@ -1,3 +1,4 @@
+// 偏好记忆提示词集成测试：仅已批准偏好注入写作/审稿/润色提示词，且不覆盖 BookState。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

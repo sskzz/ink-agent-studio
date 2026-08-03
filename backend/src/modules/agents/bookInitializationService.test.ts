@@ -14,6 +14,7 @@ import { ensureWorkspace } from "../workspace/workspaceService.js";
 import { writeJsonFile } from "../../utils/jsonStore.js";
 import { initializeBookWithAi } from "./bookInitializationService.js";
 import type { RunExecutionContext } from "./runCoordinator.js";
+import { readFactCards } from "../books/factRepository.js";
 
 let tempRoot: string | null = null;
 
@@ -106,6 +107,7 @@ describe("initializeBookWithAi", () => {
       "foundation",
       "world",
       "story_graph",
+      "story_backbone",
       "outline_plan",
       "entity_requirements",
       "outline",
@@ -116,7 +118,7 @@ describe("initializeBookWithAi", () => {
       "apply_bundle"
     ]);
     expect(checkpoints).toEqual(stages);
-    expect(artifacts).toHaveLength(11);
+    expect(artifacts).toHaveLength(12);
     expect(committed).toBe(true);
     expect(systemPrompts[0]).toContain('"const": "book-foundation.v1"');
     expect(systemPrompts[0]).toContain('"minimum": 20000');
@@ -130,16 +132,17 @@ describe("initializeBookWithAi", () => {
       "planning",
       "planning",
       "planning",
+      "planning",
       "review"
     ]);
-    expect(streams).toEqual(Array(9).fill(true));
+    expect(streams).toEqual(Array(10).fill(true));
     expect(prompts[1]).toContain("失踪姐姐引出的永夜阴谋");
     expect(prompts[2]).toContain("moon-coast");
     expect(prompts[3]).toContain("hero-lin");
-    expect(prompts[5]).toContain("old-tower");
+    expect(prompts[6]).toContain("old-tower");
     expect(prompts[6]).toContain("guide-su");
     expect(prompts[7]).toContain("moon-key");
-    expect(prompts[8]).toContain("月亮永远不会落下");
+    expect(prompts[9]).toContain("月亮永远不会落下");
 
     const book = await getBook(paths, created.id);
     expect(book).toMatchObject({
@@ -176,7 +179,145 @@ describe("initializeBookWithAi", () => {
     ]));
     expect(result).toMatchObject({ approvalRequired: false, generatedEntities: 6 });
   });
+
+  it("injects immutable facts and confirmed summary into downstream stage prompts and normalizes locked book fields", async () => {
+    const { prompts } = await runInitializationWithResponses(createStageResponses());
+
+    expect(prompts[1]).toContain("用户锁定标题");
+    expect(prompts[1]).not.toContain("AI 不应覆盖的标题");
+    expect(prompts[2]).toContain("【不可变事实");
+    expect(prompts[2]).toContain("[fact:foundation-premise]");
+    expect(prompts[2]).toContain("[fact:world-rule-1]");
+    expect(prompts[2]).toContain("【已确认设定摘要");
+    expect(prompts[2]).toContain("[fact:region-moon-coast]");
+    expect(prompts[4]).toContain("[fact:backbone-start-1]");
+    expect(prompts[4]).toContain("[fact:backbone-key-1]");
+    expect(prompts[6]).toContain("【不可变事实");
+  });
+
+  it("rejects when initial state duplicates an event already planned in the outline", async () => {
+    const responses = createStageResponses();
+    const initialState = responses[8] as { foreshadowing: Array<{ content: string }> };
+    initialState.foreshadowing[0].content = "月钥能开启旧塔核心";
+
+    await expect(runInitializationWithResponses(responses)).rejects.toThrow(/事件重复/);
+  });
+
+  it("rejects when the outline replans an event already fixed in the story backbone", async () => {
+    const responses = createStageResponses();
+    const outlinePlan = responses[4] as { volumes: Array<{ foreshadowing: string[] }> };
+    outlinePlan.volumes[0].foreshadowing = ["姐姐失踪"];
+
+    await expect(runInitializationWithResponses(responses)).rejects.toThrow(/时间线骨架重复/);
+  });
+
+  it("repairs a failing consistency review by regenerating downstream stages with injected issues", async () => {
+    const base = createStageResponses();
+    const responses = [
+      ...base.slice(0, 9),
+      {
+        schemaVersion: "book-initialization-review.v1",
+        passed: false,
+        issues: [{ severity: "blocking", message: "卷纲与时间线骨架冲突：激活事件重复" }],
+        summary: "存在阻断冲突"
+      },
+      ...base.slice(3, 9),
+      base[9]
+    ];
+    const { prompts } = await runInitializationWithResponses(responses);
+
+    expect(prompts).toHaveLength(17);
+    expect(prompts[16]).toContain("【上一轮一致性审查未通过的问题");
+    expect(prompts[16]).toContain("卷纲与时间线骨架冲突");
+  });
+
+  it("rejects when an entity requirement schedules an event already fixed in the story backbone", async () => {
+    const responses = createStageResponses();
+    const requirements = responses[5] as {
+      requiredEntities: { supportingCharacters: Array<{ firstUse: string }> };
+    };
+    requirements.requiredEntities.supportingCharacters[0].firstUse = "姐姐失踪";
+
+    await expect(runInitializationWithResponses(responses)).rejects.toThrow(/firstUse 与时间线骨架/);
+  });
+
+  it("persists fact cards into the book directory after a successful initialization", async () => {
+    const { paths, bookId } = await runInitializationWithResponses(createStageResponses());
+
+    const facts = await readFactCards(paths, bookId);
+    const byId = new Map(facts.map((card) => [card.id, card]));
+    expect(byId.get("fact:foundation-premise")?.content).toContain("永夜阴谋");
+    expect(byId.get("fact:world-rule-1")?.content).toContain("月潮");
+    expect(byId.get("fact:world-rule-1")?.mutability).toBe("immutable");
+    expect(byId.get("fact:foundation-boundary-1")?.kind).toBe("rule");
+    expect(byId.get("fact:backbone-start-1")?.content).toContain("姐姐失踪");
+    expect(byId.get("fact:summary-mainline")?.content).toContain("林夕追查姐姐失踪");
+    expect(byId.get("fact:summary-story-start")?.content).toContain("空白档案");
+    expect(byId.get("fact:summary-timeline")?.content).toContain("既成事实");
+    expect(facts.every((card) => card.schemaVersion === "fact-card.v1")).toBe(true);
+  });
 });
+
+async function runInitializationWithResponses(responses: unknown[]) {
+  tempRoot = await mkdtemp(path.join(os.tmpdir(), "ink-agent-book-initialization-"));
+  const paths = createWorkspacePaths(tempRoot);
+  await ensureWorkspace(paths);
+  await writeJsonFile(paths.writingStylesFile, [{
+    id: "style-ready",
+    name: "紧凑悬疑",
+    summary: "短句推进、信息递进",
+    parameters: {},
+    sampleFileName: null,
+    latestVersionId: "style-version-1",
+    sampleCount: 1,
+    validSampleCount: 1,
+    status: "ready",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z"
+  }]);
+  const created = await createBook(paths, {
+    title: "用户锁定标题",
+    brief: "用户不可覆盖简述：主角必须救回失踪的姐姐。",
+    worldFileName: "user-world.md",
+    worldFileContent: "# 用户世界观\n\nSECRET_WORLD_FACT：月亮永远不会落下。"
+  });
+  const command: Extract<RunCommand, { type: "initialize_book" }> = {
+    schemaVersion: "run-command.v1",
+    type: "initialize_book",
+    bookId: created.id,
+    input: { trigger: "test" }
+  };
+  const context: RunExecutionContext = {
+    runId: `run-${responses.length}`,
+    command,
+    signal: new AbortController().signal,
+    setStage() {},
+    emitProgress() {},
+    emitDelta() {},
+    saveArtifact(artifactType) {
+      return { id: `artifact-${artifactType}`, contentHash: "hash" };
+    },
+    loadArtifact() {
+      return null;
+    },
+    saveCheckpoint(stage) {
+      return { id: `checkpoint-${stage}` };
+    },
+    markCommitted() {}
+  };
+  const prompts: string[] = [];
+  await initializeBookWithAi(paths, context, {
+    planningModel: fakeModel,
+    reviewModel: fakeModel,
+    async generateText(_paths, _model, input): Promise<ModelGenerateTextResult> {
+      prompts.push(input.userPrompt);
+      const response = responses.shift();
+      if (!response) throw new Error("假模型缺少阶段响应");
+      return { text: JSON.stringify(response), provider: "openai", model: "fake-model" };
+    }
+  });
+  return { paths, bookId: created.id, prompts };
+}
 
 const fakeModel: ModelConfigRecord = {
   id: "fake-model",
@@ -246,6 +387,17 @@ function createStageResponses(): unknown[] {
       relationships: [
         { fromId: "hero-lin", toId: "rival-qin", relation: "调查者与阻拦者", tension: "二人都想救城但路径相反" }
       ]
+    },
+    {
+      schemaVersion: "book-story-backbone.v1",
+      startEvents: [
+        { id: "sister-missing", title: "姐姐失踪", detail: "故事开始时姐姐已失踪，林夕收到空白档案", relatedEntityIds: ["hero-lin"], status: "happened" },
+        { id: "moon-curse", title: "月亮不再落下", detail: "永夜结界在十七年前已经启动", relatedEntityIds: ["night-watch"], status: "ongoing" }
+      ],
+      keyEvents: [
+        { id: "key-old-tower", title: "进入旧塔", detail: "林夕与秦昼进入旧塔核心", volumeIndex: 1, relatedEntityIds: ["hero-lin", "rival-qin"] }
+      ],
+      timelineNote: "开场事件均为既成事实，后续阶段只能引用"
     },
     {
       schemaVersion: "book-outline-plan.v1",

@@ -1,7 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+/**
+ * 作品库页：列表 / 新建 / 详情 / 兜底预览四种视图。
+ * 详情页内置 AI 初始化状态轮询（1.5s）与 SSE 事件订阅，支持暂停、重试初始化；
+ * 新建作品会把上传的 world.md 正文一并写入后端。
+ */
+import type { RunEvent } from "@ink-agent/contracts";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import { Trash2 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { subscribeRunEvents, pauseRun } from "@/features/runs/api/runsApi";
 import { listWritingStyles } from "@/features/writing-styles/api/writingStylesApi";
 import type { WritingStyle } from "@/features/writing-styles/data/writingStyles";
 import {
@@ -21,11 +28,13 @@ import type { BookDetail, BookDraft, DetailDocument } from "@/features/workspace
 
 type WorkspaceView = "list" | "create" | "preview" | "detail";
 
+/** 路由 state：支持从外壳“新建作品”按钮或编辑器跳转到指定视图。 */
 interface WorkspaceRouteState {
   bookId?: string;
   view?: WorkspaceView;
 }
 
+/** 新建作品的空表单初始值：全部字段留空，交给 AI 自动补全。 */
 const initialDraft: BookDraft = {
   title: "",
   genre: "",
@@ -41,12 +50,15 @@ const initialDraft: BookDraft = {
   worldFileContent: ""
 };
 
+/** 初始化仍处于活跃状态（需要轮询/订阅）的状态集合。 */
 const activeInitializationStatuses = new Set(["queued", "running", "cancelling"]);
 
+/** 初始化阶段 key → 中文阶段名，用于进度展示。 */
 const initializationStageLabels: Record<string, string> = {
   foundation: "基础设置与故事基石",
   world: "世界观骨架",
   story_graph: "核心人物与势力",
+  story_backbone: "关键事件时间线",
   outline_plan: "总纲与分卷规划",
   entity_requirements: "剧情实体需求",
   outline: "总纲与分卷规划",
@@ -57,6 +69,7 @@ const initializationStageLabels: Record<string, string> = {
   apply_bundle: "写入作品文件"
 };
 
+/** 写作风格下拉选项：首项“交给 AI 自动选择”，其余为已保存风格。 */
 function createWritingStyleOptions(styles: WritingStyle[]) {
   return [
     {
@@ -72,22 +85,17 @@ function createWritingStyleOptions(styles: WritingStyle[]) {
   ];
 }
 
+/** 根据风格 id 取风格名；未匹配返回空串（调用方显示为“AI 自动选择”）。 */
 function getWritingStyleName(styles: WritingStyle[], styleId: string) {
   return styles.find((style) => style.id === styleId)?.name ?? "";
 }
 
+/** 数字按千分位格式化，用于字数统计展示。 */
 function formatNumber(value: number) {
   return new Intl.NumberFormat("zh-CN").format(value);
 }
 
-/**
- * 作品库页面。
- *
- * 当前页面优先读取后端本地 workspace：
- * - 作品列表和详情来自 /api/v1/books。
- * - 核心文件和世界观通过 MarkdownRenderer 渲染后端读取的 md 内容。
- * - 新建作品会真实写入本地作品目录；后端不可用时才展示前端预览兜底。
- */
+/** 作品库页主组件：视图状态、初始化轮询/订阅与所有作品操作都集中在此。 */
 export function WorkspacePage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -103,11 +111,16 @@ export function WorkspacePage() {
   const [feedback, setFeedback] = useState("");
   const [worldFileReading, setWorldFileReading] = useState(false);
   const [worldFileError, setWorldFileError] = useState("");
+  const [initializationEvents, setInitializationEvents] = useState<RunEvent[]>([]);
+  const [initializationStreamError, setInitializationStreamError] = useState("");
+  const [pausingInitialization, setPausingInitialization] = useState(false);
+  const [streamRefreshKey, setStreamRefreshKey] = useState(0);
   const worldFileReadVersion = useRef(0);
 
   const selectedBook = books.find((book) => book.id === selectedBookId) ?? books[0];
   const writingStyleOptions = createWritingStyleOptions(writingStyles);
 
+  // 处理从侧边栏“新建作品”或作品卡片带入的路由 state；处理后即清掉 state 防止刷新重复触发。
   useEffect(() => {
     const routeState = location.state as WorkspaceRouteState | null;
 
@@ -128,6 +141,7 @@ export function WorkspacePage() {
     }
   }, [location.state, navigate]);
 
+  // 挂载时并行加载作品列表与写作风格；ignore 标记防止卸载后 setState。
   useEffect(() => {
     let ignore = false;
 
@@ -166,6 +180,7 @@ export function WorkspacePage() {
     };
   }, []);
 
+  // 初始化处于活跃状态时每 1.5s 轮询进度；完成后拉取完整详情刷新作品数据。
   useEffect(() => {
     const initialization = selectedBook?.initialization;
     if (view !== "detail" || !selectedBookId || !initialization || !activeInitializationStatuses.has(initialization.status)) {
@@ -188,7 +203,7 @@ export function WorkspacePage() {
         if (nextInitialization?.status === "failed") {
           setFeedback(`AI 作品初始化失败：${nextInitialization.error || "请检查规划模型与运行记录。"}`);
         } else if (nextInitialization?.status === "interrupted") {
-          setFeedback("AI 作品初始化已中断，可以点击“重试初始化”从检查点继续。");
+          setFeedback("AI 作品初始化已中断/暂停，可以从检查点继续执行。");
         } else if (nextInitialization?.status === "cancelled") {
           setFeedback("AI 作品初始化已取消，可以点击“重试初始化”继续。");
         }
@@ -202,6 +217,37 @@ export function WorkspacePage() {
     };
   }, [selectedBook?.initialization?.status, selectedBookId, view]);
 
+  // 订阅初始化运行的 SSE 事件流；runId 变化或手动刷新（streamRefreshKey）时重建订阅。
+  useEffect(() => {
+    const runId = selectedBook?.initialization?.runId;
+    if (view !== "detail" || !runId) {
+      setInitializationEvents([]);
+      setInitializationStreamError("");
+      return;
+    }
+    let ignore = false;
+    let terminal = false;
+    setInitializationEvents([]);
+    setInitializationStreamError("");
+    return subscribeRunEvents(
+      runId,
+      (event) => {
+        if (ignore) return;
+        if (["run_completed", "run_failed", "run_cancelled", "run_interrupted"].includes(event.type)) {
+          terminal = true;
+        }
+        setInitializationEvents((current) => {
+          if (current.some((item) => item.seq === event.seq)) return current;
+          return [...current, event].sort((left, right) => left.seq - right.seq);
+        });
+      },
+      () => {
+        if (!ignore && !terminal) setInitializationStreamError("执行事件流已断开，请刷新页面查看最新状态。");
+      }
+    );
+  }, [selectedBook?.initialization?.runId, streamRefreshKey, view]);
+
+  /** 局部更新新建作品表单草稿。 */
   function updateDraft(patch: Partial<BookDraft>) {
     setDraft((currentDraft) => ({
       ...currentDraft,
@@ -209,6 +255,7 @@ export function WorkspacePage() {
     }));
   }
 
+  /** 进入新建视图：重置草稿与世界文件读取状态。 */
   function openCreateView() {
     worldFileReadVersion.current += 1;
     setDraft(initialDraft);
@@ -219,17 +266,20 @@ export function WorkspacePage() {
     setView("create");
   }
 
+  /** 回到列表视图：关闭文档弹层。 */
   function openListView() {
     setActiveDocument(null);
     setView("list");
   }
 
+  /** 打开指定作品详情。 */
   function openDetailView(bookId: string) {
     setSelectedBookId(bookId);
     setActiveDocument(null);
     setView("detail");
   }
 
+  /** 选择世界观 md 文件：异步读取正文并写入草稿；用版本号防竞态，避免旧文件覆盖新选择。 */
   function handleWorldFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     const readVersion = ++worldFileReadVersion.current;
@@ -262,6 +312,7 @@ export function WorkspacePage() {
       });
   }
 
+  /** 创建作品：提交草稿，成功后进入详情；失败时保留草稿进入本地预览视图。 */
   async function saveDraft() {
     if (worldFileReading || worldFileError) {
       setFeedback(worldFileError || "正在读取世界观 Markdown，请稍候再创建作品。");
@@ -295,6 +346,7 @@ export function WorkspacePage() {
     }
   }
 
+  /** 重试 AI 初始化：可复用上次检查点继续，成功后重建事件订阅。 */
   async function retryInitialization() {
     if (!selectedBook) return;
     setSaving(true);
@@ -304,6 +356,7 @@ export function WorkspacePage() {
       setBooks((current) => current.map((book) =>
         book.id === selectedBook.id ? { ...book, initialization } : book
       ));
+      setStreamRefreshKey((key) => key + 1);
       setFeedback(initialization.reused ? "已从原运行检查点恢复 AI 初始化。" : "AI 初始化已重新启动。");
     } catch (error) {
       setFeedback(`AI 初始化重试失败：${toMessage(error)}`);
@@ -312,10 +365,28 @@ export function WorkspacePage() {
     }
   }
 
+  /** 暂停 AI 初始化：请求后端中止模型调用并保存执行状态。 */
+  async function pauseInitialization() {
+    const runId = selectedBook?.initialization?.runId;
+    if (!runId) return;
+    setPausingInitialization(true);
+    setFeedback("");
+    try {
+      await pauseRun(runId);
+      setFeedback("已请求暂停，正在中止模型调用并保存执行状态。");
+    } catch (error) {
+      setFeedback(`AI 初始化暂停失败：${toMessage(error)}`);
+    } finally {
+      setPausingInitialization(false);
+    }
+  }
+
+  /** 从当前作品进入章节编辑器，作品 id 通过路由 state 传递。 */
   function continueWriting() {
     navigate("/editor", { state: { fromBookId: selectedBook?.id ?? selectedBookId } });
   }
 
+  /** 删除作品：需用户确认；删除后回到列表并选中剩余首项。 */
   async function deleteSelectedBook() {
     if (!selectedBook || !window.confirm(`确定永久删除《${selectedBook.title}》吗？相关数据库记录和 Markdown 文件将全部删除，此操作无法撤销。`)) {
       return;
@@ -398,7 +469,11 @@ export function WorkspacePage() {
           writingStyles={writingStyles}
           onOpenDocument={setActiveDocument}
           onRetryInitialization={() => void retryInitialization()}
+          onPauseInitialization={() => void pauseInitialization()}
           retryingInitialization={saving}
+          pausingInitialization={pausingInitialization}
+          initializationEvents={initializationEvents}
+          initializationStreamError={initializationStreamError}
         />
       ) : null}
 
@@ -429,15 +504,26 @@ interface BookDetailViewProps {
   writingStyles: WritingStyle[];
   onOpenDocument: (document: DetailDocument) => void;
   onRetryInitialization: () => void;
+  onPauseInitialization: () => void;
   retryingInitialization: boolean;
+  pausingInitialization: boolean;
+  initializationEvents: RunEvent[];
+  initializationStreamError: string;
 }
 
+/**
+ * 作品详情视图：属性、进度、角色/核心文件/世界观 + AI 初始化状态卡（轮询与 SSE 事件）。
+ */
 function BookDetailView({
   book,
   writingStyles,
   onOpenDocument,
   onRetryInitialization,
-  retryingInitialization
+  onPauseInitialization,
+  retryingInitialization,
+  pausingInitialization,
+  initializationEvents,
+  initializationStreamError
 }: BookDetailViewProps) {
   const attributeRows = [
     ["作品类型", book.genre],
@@ -452,15 +538,44 @@ function BookDetailView({
     ["世界观文件", book.attributes.worldFileName]
   ];
 
+  // 判断初始化是否真的处于“暂停”：向后回查最近一条中断事件，以 payload.paused 为准。
+  const isInitializationPaused = useMemo(() => {
+    if (book.initialization?.status !== "interrupted") return false;
+    for (let index = initializationEvents.length - 1; index >= 0; index -= 1) {
+      const event = initializationEvents[index];
+      if (event.type === "run_interrupted") return event.payload.paused === true;
+    }
+    return false;
+  }, [book.initialization?.status, initializationEvents]);
+
+  // 把模型流式增量事件（model_delta）拼成实时输出文本，仅截取末尾 6000 字符展示。
+  const liveOutput = useMemo(
+    () => initializationEvents
+      .filter((event) => event.type === "model_delta")
+      .map((event) => String(event.payload.delta ?? ""))
+      .join(""),
+    [initializationEvents]
+  );
+
   return (
     <section className="book-detail-view">
-      {book.initialization && book.initialization.status !== "completed" ? (
+      {book.initialization && (book.initialization.status !== "completed" || initializationEvents.length > 0) ? (
         <div className={`book-initialization-status ${book.initialization.status}`} role="status" aria-live="polite">
-          <div>
-            <strong>{initializationStatusTitle(book.initialization.status)}</strong>
+          <div className="book-initialization-summary">
+            <strong>{isInitializationPaused ? "AI 初始化已暂停" : initializationStatusTitle(book.initialization.status)}</strong>
             <span>{book.initialization.stage ? initializationStageLabels[book.initialization.stage] ?? book.initialization.stage : "等待后台任务"}</span>
           </div>
           {book.initialization.error ? <p>{book.initialization.error}</p> : null}
+          {activeInitializationStatuses.has(book.initialization.status) ? (
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={pausingInitialization}
+              onClick={onPauseInitialization}
+            >
+              {pausingInitialization ? "正在暂停..." : "暂停执行"}
+            </button>
+          ) : null}
           {["failed", "interrupted", "cancelled"].includes(book.initialization.status) ? (
             <button
               className="secondary-button"
@@ -468,8 +583,30 @@ function BookDetailView({
               disabled={retryingInitialization}
               onClick={onRetryInitialization}
             >
-              {retryingInitialization ? "正在重试..." : "重试初始化"}
+              {retryingInitialization ? "正在恢复..." : isInitializationPaused ? "继续执行" : "重试初始化"}
             </button>
+          ) : null}
+          {initializationEvents.length > 0 ? (
+            <div className="book-initialization-detail">
+              <div className="book-initialization-detail-title">
+                <strong>执行详情</strong>
+                <span>{initializationStreamError || `${initializationEvents.length} 条事件`}</span>
+              </div>
+              <ol className="book-initialization-events">
+                {initializationEvents.map((event) => (
+                  <InitializationEventRow key={event.eventId} event={event} />
+                ))}
+              </ol>
+              {liveOutput.trim() ? (
+                <div className="book-initialization-live">
+                  <div className="book-initialization-detail-title">
+                    <strong>实时输出</strong>
+                    <span>模型流式返回</span>
+                  </div>
+                  <pre className="book-initialization-live-text">{liveOutput.slice(-6000)}</pre>
+                </div>
+              ) : null}
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -605,12 +742,90 @@ function BookDetailView({
   );
 }
 
+/** 初始化状态 → 顶部标题文案。 */
 function initializationStatusTitle(status: NonNullable<BookDetail["initialization"]>["status"]) {
+  if (status === "completed") return "AI 初始化已完成";
   if (status === "failed") return "AI 初始化失败";
   if (status === "interrupted") return "AI 初始化已中断";
   if (status === "cancelled" || status === "cancelling") return "AI 初始化已取消";
   if (status === "queued") return "AI 初始化排队中";
   return "AI 正在生成作品信息";
+}
+
+/** 初始化事件行：按事件类型渲染为可读文案，并决定行内色调。 */
+function InitializationEventRow({ event }: { event: RunEvent }) {
+  const detail = initializationEventDetail(event);
+  return (
+    <li className="book-initialization-event" data-tone={detail.tone}>
+      <time>{formatEventTime(event.timestamp)}</time>
+      <span>{detail.text}</span>
+    </li>
+  );
+}
+
+/** 事件 → 展示文本与色调：逐类型映射，未知类型回退为“stage + 类型名”。 */
+function initializationEventDetail(event: RunEvent): { text: string; tone: "normal" | "info" | "success" | "error" } {
+  const stage = event.stage ? initializationStageLabels[event.stage] ?? event.stage : "";
+  const prefix = stage ? `【${stage}】` : "";
+  switch (event.type) {
+    case "run_created":
+    case "run_queued":
+      return { text: "已进入执行队列", tone: "info" };
+    case "run_started":
+      return { text: "开始执行", tone: "info" };
+    case "stage_started":
+      return { text: `${prefix}开始执行`, tone: "info" };
+    case "stage_completed":
+      return { text: `${prefix}执行完成`, tone: "success" };
+    case "stage_progress": {
+      const message = String(event.payload.message ?? "");
+      return { text: message ? `${prefix}${message}` : `${prefix}处理中`, tone: "info" };
+    }
+    case "model_attempt_started": {
+      const purpose = String(event.payload.purpose ?? "生成");
+      return { text: `${prefix}模型调用开始（${purpose}）`, tone: "info" };
+    }
+    case "model_attempt_completed": {
+      const succeeded = event.payload.status === "completed";
+      const status = succeeded ? "成功" : String(event.payload.status ?? "结束");
+      const tokens = typeof event.payload.totalTokens === "number" ? `${event.payload.totalTokens} Token` : null;
+      const latency = typeof event.payload.latencyMs === "number" ? `${event.payload.latencyMs} ms` : null;
+      const suffix = [tokens, latency].filter(Boolean).join(" · ");
+      return { text: `${prefix}模型调用${status}${suffix ? ` · ${suffix}` : ""}`, tone: succeeded ? "success" : "error" };
+    }
+    case "checkpoint_saved":
+      return { text: `${prefix}检查点已保存，可中断恢复`, tone: "info" };
+    case "degraded":
+      return { text: "模型链路降级，已切换备用策略", tone: "error" };
+    case "review_completed":
+      return { text: `${prefix}审稿完成`, tone: "success" };
+    case "cancel_requested":
+      return { text: "已请求取消", tone: "error" };
+    case "run_completed":
+      return { text: "作品信息生成完成", tone: "success" };
+    case "run_failed": {
+      const error = event.payload.error as { message?: unknown } | null;
+      const message = error && typeof error === "object" && "message" in error
+        ? String(error.message)
+        : String(event.payload.error ?? "未知错误");
+      return { text: `执行失败：${message}`, tone: "error" };
+    }
+    case "run_interrupted":
+      return { text: "执行已中断，可点击“重试初始化”从检查点继续", tone: "error" };
+    case "run_cancelled":
+      return { text: "执行已取消", tone: "error" };
+    default:
+      return { text: `${prefix}${event.type.replaceAll("_", " ")}`, tone: "normal" };
+  }
+}
+
+/** 事件时间格式化为 HH:mm:ss。 */
+function formatEventTime(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).format(new Date(value));
 }
 
 interface CreateBookViewProps {
@@ -624,6 +839,7 @@ interface CreateBookViewProps {
   onUpdate: (patch: Partial<BookDraft>) => void;
 }
 
+/** 新建作品表单视图：全部字段可选，留空由 AI 自动补全。 */
 function CreateBookView({
   draft,
   saving,
@@ -803,6 +1019,7 @@ interface BookPreviewViewProps {
   onCreateAnother: () => void;
 }
 
+/** 作品创建预览视图：后端创建失败时的兜底，展示草稿内容与后续生成计划。 */
 function BookPreviewView({ draft, writingStyles, onCreateAnother }: BookPreviewViewProps) {
   const previewRows = [
     ["作品名称", draft.title || "AI 自动生成"],
@@ -849,6 +1066,7 @@ function BookPreviewView({ draft, writingStyles, onCreateAnother }: BookPreviewV
   );
 }
 
+/** 异常归一为可展示的错误文案。 */
 function toMessage(error: unknown) {
   return error instanceof Error ? error.message : "未知错误";
 }

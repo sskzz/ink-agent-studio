@@ -1,3 +1,9 @@
+/**
+ * 审稿服务。
+ * 职责：统一入口承载三类审稿任务——章节审查（review）、去 AI 味润色（anti_ai_polish）、一致性检查（consistency_check）；
+ * 每次运行都经过 executeAgentRun 编排：加载上下文 → 场景分类 → 本地量化审查 → 语义审查（模型）→ 汇总三路结论；
+ * 边界：润色结果一律作为待确认预览返回，不直接覆盖章节正文；审稿模型不可用时润色降级为本地规则建议。
+ */
 import { chapterAiTaskInputSchema } from "../../schemas/chapterSchemas.js";
 import { executeAgentRun } from "../agents/agentRunExecutor.js";
 import { generateModelText } from "../ai/modelGateway.js";
@@ -18,6 +24,10 @@ import { PromptAssembler } from "../prompts/promptAssembler.js";
 import type { AppConfig } from "@ink-agent/contracts";
 import { userMemoryPromptSourceLabel } from "../memory/memoryPromptPolicy.js";
 
+/**
+ * 审查章节：本地量化（风格度量 + 反 AI）+ 语义审查（模型）三路合并出最终审稿结论。
+ * @returns output.review 合并后的审查报告，trace 记录反 AI 策略、场景与风格版本解析轨迹
+ */
 export async function reviewChapter(paths: WorkspacePaths, bookId: string, chapterId: string, body: unknown) {
   const input = chapterAiTaskInputSchema.parse(body);
   return executeAgentRun<Record<string, unknown>>(
@@ -45,6 +55,7 @@ export async function reviewChapter(paths: WorkspacePaths, bookId: string, chapt
       if (runtime.scene.tokenUsage) runContext.addTokenUsage("sceneClassification", runtime.scene.tokenUsage);
 
       runContext.setStage("local_review");
+      // 本地量化审查：只有绑定风格且有多样本版本（compiledV2）才做风格度量对比；反 AI 审查始终执行
       const local = runtime.style && runtime.version && runtime.compiledV2
         ? evaluateCompiledStyleCompliance(
           chapter.content,
@@ -108,6 +119,10 @@ export async function reviewChapter(paths: WorkspacePaths, bookId: string, chapt
   );
 }
 
+/**
+ * 去 AI 味润色：先用审稿模型重写正文，再对结果做三路复检。
+ * @returns output.preview 待确认的润色结果（不落盘）；审稿模型不可用时返回本地规则建议并标记 degraded
+ */
 export async function polishChapter(paths: WorkspacePaths, bookId: string, chapterId: string, body: unknown) {
   const input = chapterAiTaskInputSchema.parse(body);
   return executeAgentRun<Record<string, unknown>>(
@@ -134,6 +149,7 @@ export async function polishChapter(paths: WorkspacePaths, bookId: string, chapt
       });
       if (runtime.scene.tokenUsage) runContext.addTokenUsage("sceneClassification", runtime.scene.tokenUsage);
       const reviewModel = await getRoutedReviewModel(paths);
+      // 审稿模型不可用：不中断流程，降级为本地全局规则建议（去掉高频机械副词），并明确告知用户
       if (!reviewModel) {
         return {
           output: {
@@ -170,12 +186,14 @@ export async function polishChapter(paths: WorkspacePaths, bookId: string, chapt
         systemPrompt: assembledPrompt.systemPrompt,
         userPrompt: assembledPrompt.userPrompt,
         temperature: 0.35,
+        // 输出预算与章节字数挂钩：约 1.6 倍于原文，下限 1200、上限 6000
         maxTokens: Math.min(6000, Math.max(1200, Math.ceil(chapter.wordCount * 1.6))),
         responseFormat: "text",
         timeoutMs: 90000
       });
       runContext.addTokenUsage("polish", result.tokenUsage ?? null);
       runContext.setStage("final_review");
+      // 对润色结果做复检：风格度量、反 AI 与语义审查都作用于 result.text 而非原文
       const local = runtime.version && runtime.compiledV2
         ? evaluateCompiledStyleCompliance(
           result.text,
@@ -234,6 +252,11 @@ export async function polishChapter(paths: WorkspacePaths, bookId: string, chapt
   );
 }
 
+/**
+ * 一致性检查（本地规则版）。
+ * 职责：对作品做连续性检查占位实现，当前只输出角色与后续检查计划的提示信息；
+ * 边界：真实连续性检查依赖 state/current.md 与 foreshadowing.md 的读取，属未来扩展范围。
+ */
 export async function consistencyCheck(paths: WorkspacePaths, bookId: string, body: unknown) {
   const input = chapterAiTaskInputSchema.parse(body);
   return executeAgentRun<Record<string, unknown>>(
@@ -256,6 +279,7 @@ export async function consistencyCheck(paths: WorkspacePaths, bookId: string, bo
   );
 }
 
+/** 取已启用的审稿模型；未路由或未启用时返回 null（调用方降级处理）。 */
 async function getRoutedReviewModel(paths: WorkspacePaths) {
   const routes = await getModelRoutes(paths);
   if (!routes.reviewModelId) return null;
@@ -263,6 +287,7 @@ async function getRoutedReviewModel(paths: WorkspacePaths) {
   return config.enabled ? config : null;
 }
 
+/** 组装运行追踪：记录反 AI 策略版本/哈希/生效规则、场景、风格版本与回退原因，供调试与回放。 */
 function createRuntimeTrace(runtime: Awaited<ReturnType<typeof resolveWritingStyleRuntimeContext>>, extra: Record<string, unknown> = {}) {
   return {
     antiAiRuleSetVersion: runtime.antiAiPolicy.ruleSetVersion,
@@ -282,6 +307,11 @@ function createRuntimeTrace(runtime: Awaited<ReturnType<typeof resolveWritingSty
   };
 }
 
+/**
+ * 组装润色 Prompt：按 PromptAssembler 的预算分区装配——
+ * stable（不可违背的修订铁律）/facts（正文约束）/memory（用户记忆）/scene（作品与正文）/skills（技能）/turn（用户指令）；
+ * 各分区独立预算，越界内容由汇编器截断，防止任一来源撑爆上下文。
+ */
 function assemblePolishPrompt(input: {
   bookTitle: string;
   chapterTitle: string;
@@ -335,6 +365,7 @@ function assemblePolishPrompt(input: {
   ]);
 }
 
+/** 按技能库选择适合本轮审稿/润色的技能并生成提示。 */
 async function selectReviewSkills(
   paths: WorkspacePaths,
   instruction: string,
@@ -350,6 +381,7 @@ async function selectReviewSkills(
   }, config);
 }
 
+/** 语义审查的 Token 预算表：与 PromptAssembler 的分区一致，供 reviewNovelWritingPolicy 内部预算控制。 */
 function createPromptBudgets(config: AppConfig) {
   return {
     stable: config.context.budgets.stableMaxTokens,

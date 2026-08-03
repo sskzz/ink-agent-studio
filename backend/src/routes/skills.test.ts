@@ -1,3 +1,4 @@
+// 技能路由测试：内置技能列表与预算化选择预览。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

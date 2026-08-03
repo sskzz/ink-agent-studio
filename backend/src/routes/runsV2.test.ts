@@ -1,3 +1,4 @@
+// Run V2 路由测试：创建/执行/查询/SSE 事件流重放、重放缺口超过上限返回 409。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

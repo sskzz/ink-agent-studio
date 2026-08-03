@@ -1,12 +1,29 @@
+/**
+ * 场景风格调整。
+ * 职责：为不同场景类型（动作/对白/心理/描写/悬念/高潮等）提供度量中心点偏移与语义调整提示，
+ * 让同一风格在不同场景下合理变化而不破坏核心风格；
+ * 边界：纯静态策略表；调整幅度受 maximumDelta 限制，且只对注册表中 sceneAdjustable 的度量生效。
+ */
 import type { SceneType } from "../../schemas/styleVersionSchemas.js";
 
+/**
+ * 场景调整策略：metricAdjustments 平移/缩放度量目标，semanticAdjustments 是注入 Prompt 的语义提示。
+ * centerDelta 中心偏移、rangeScale 区间缩放、maximumDelta 偏移上限。
+ */
 export interface SceneStyleAdjustment {
   sceneType: SceneType;
   metricAdjustments: Record<string, { centerDelta?: number; rangeScale?: number; maximumDelta?: number }>;
   semanticAdjustments: string[];
 }
 
+/**
+ * 按场景类型取调整策略。
+ * @param sceneType 场景类型
+ * @returns 该场景的度量与语义调整；mixed 场景无调整
+ */
 export function getSceneStyleAdjustment(sceneType: SceneType): SceneStyleAdjustment {
+// 策略说明：中心点偏移有最大幅度钳制（maximumDelta），防止场景改变把风格彻底带偏；
+// 语义调整始终以「不得改变 X」的形式收尾，守住风格边界
   const policies: Record<SceneType, Omit<SceneStyleAdjustment, "sceneType">> = {
     action: {
       metricAdjustments: {

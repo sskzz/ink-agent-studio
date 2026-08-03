@@ -1,3 +1,4 @@
+// 测试：sceneStyleAdjustment 场景策略表。
 import { describe, expect, it } from "vitest";
 import { getSceneStyleAdjustment } from "./sceneStyleAdjustment.js";
 

@@ -1,7 +1,19 @@
+/**
+ * 反 AI 规则注册表。
+ * 职责：集中维护内置去 AI 味规则（全局，不随风格变化），按阶段（生成/审稿/润色）适用；
+ * 边界：规则是静态数据，编译与去重逻辑在 antiAiConstraintCompiler；风格定制规则通过 canonicalKey 关联覆盖。
+ */
+
+/** 规则类别：对应语义审查与润色提示的领域划分。 */
 export type AntiAiCategory = "emotion" | "dialogue" | "description" | "structure" | "language" | "logic" | "rhythm";
 export type AntiAiSeverity = "low" | "medium" | "high";
 export type AntiAiStage = "generation" | "review" | "polish";
 
+/**
+ * 单条反 AI 规则。
+ * level=guard 为不可协商红线（如只输出正文、不替读者解释）；baseline 可随风格放松/收紧；
+ * canonicalKey 是全局语义键，风格规则复用同键即视为覆盖而非新增。
+ */
 export interface AntiAiRule {
   id: string;
   canonicalKey: string;
@@ -16,8 +28,10 @@ export interface AntiAiRule {
   appliesTo: AntiAiStage[];
 }
 
+/** 规则集版本号：规则内容变更时必须升级，避免缓存命中旧策略。 */
 export const ANTI_AI_RULESET_VERSION = "anti-ai-rules.v1";
 
+// 全局内置规则：guard 规则所有场景强制，baseline 规则可被风格规则调整
 const rules: AntiAiRule[] = [
   {
     id: "anti-ai-output-only",
@@ -138,6 +152,7 @@ const rules: AntiAiRule[] = [
   }
 ];
 
+/** 取规则集快照：appliesTo 数组拷贝返回，防止调用方修改内部状态。 */
 export function getAntiAiRuleSet() {
   return {
     schemaVersion: "anti-ai-rule-set.v1" as const,

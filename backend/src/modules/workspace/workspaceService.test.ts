@@ -1,3 +1,4 @@
+// 测试文件：工作区初始化（目录/索引文件）与摘要统计。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

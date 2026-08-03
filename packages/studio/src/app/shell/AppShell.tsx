@@ -1,22 +1,35 @@
+/**
+ * 应用外壳布局：左侧功能导航 + 顶栏 + 内容区。
+ * 负责全局场景命名、侧边栏折叠状态以及各页面共用的壳层样式，
+ * 编辑器页隐藏侧边栏与氛围背景以让出最大写作空间。
+ */
 import { CheckCircle2, HardDrive, PanelLeftClose, PanelLeftOpen, SquarePen } from "lucide-react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { navigationItems, shellCopy } from "@/config/navigation";
 import { useWorkspaceStore } from "@/shared/stores/workspaceStore";
 import "./AppShell.css";
 
+/** 侧边栏导航按创作 / 智能协作 / 系统三组分区展示。 */
 const navigationSections = ["创作", "智能协作", "系统"] as const;
 
+/** 从路由首段提取场景名，用于驱动全局样式（scene-* class），空路径视为 dashboard。 */
 function getSceneName(pathname: string) {
   const routeName = pathname.split("/")[1];
   return routeName || "dashboard";
 }
 
+/**
+ * 应用外壳组件：渲染侧边栏、顶栏与路由出口（Outlet）。
+ * 交互要点：点击侧边栏折叠按钮切换持久化状态；编辑器/去 AI 味路由进入沉浸模式，
+ * 隐藏侧边栏与氛围背景；路由切换通过 key 重新触发进入动画。
+ */
 export function AppShell() {
   const { sidebarCollapsed, toggleSidebar } = useWorkspaceStore();
   const location = useLocation();
   const isEditorRoute = location.pathname === "/editor";
   const isAntiAiRoute = location.pathname === "/anti-ai";
   const sceneName = getSceneName(location.pathname);
+  // 匹配当前导航项：首页用精确匹配，其余用前缀匹配，兜底选中第一项保证顶栏始终有标题。
   const currentPage = navigationItems.find((item) => (
     item.to === "/" ? location.pathname === "/" : location.pathname.startsWith(item.to)
   )) ?? navigationItems[0];

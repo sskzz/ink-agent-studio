@@ -1,3 +1,4 @@
+// 偏好记忆路由测试：提议→批准→归档全流程、非法 limit / 缺失审批参数 / 事实卡校验拒绝。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

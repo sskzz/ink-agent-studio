@@ -1,6 +1,14 @@
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 
+/**
+ * 统一 API 响应工具。
+ * 所有路由的成功/失败响应都走这里，保证 { code, message, data } 结构全站一致。
+ */
+
+/**
+ * 统一成功响应包体：code 固定为 0 表示成功。
+ */
 export interface ApiResponse<T> {
   code: number;
   message: string;
@@ -27,6 +35,9 @@ export function jsonOk<T>(context: Context, data: T, message = "ok", status = 20
   return context.json(ok(data, message), status as ContentfulStatusCode);
 }
 
+/**
+ * 错误响应的 data 部分结构：只承载结构化调试信息，禁止放敏感内容。
+ */
 export interface ErrorResponseData {
   details?: unknown;
 }

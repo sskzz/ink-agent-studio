@@ -1,3 +1,8 @@
+/**
+ * 文件职责：章节服务：章节 CRUD、AI 续写（场景分类 → 生成 → 本地/语义审稿 → 定向修订）与进度汇总。
+ * 边界：只编排业务流程与 Prompt 装配；文件持久化走 fileStore，模型调用走 modelGateway，
+ * 风格/审稿/约束分别委托对应模块，AI 结果只返回草稿不覆盖正文。
+ */
 import { randomUUID } from "node:crypto";
 import {
   chapterAiTaskInputSchema,
@@ -35,27 +40,33 @@ import { SkillService } from "../skills/skillService.js";
 import { selectPromptMemory } from "../memory/promptMemory.js";
 import { userMemoryPromptSourceLabel } from "../memory/memoryPromptPolicy.js";
 
+/** 粗略字数统计：去除所有空白字符后计数（中文按字计，与编辑视角一致）。 */
 function countWords(content: string) {
   return content.replace(/\s+/g, "").length;
 }
 
+/** 读取章节索引；同时校验作品存在，避免对不存在的作品写入。 */
 async function readChapters(workspacePaths: WorkspacePaths, bookId: string) {
   await getBook(workspacePaths, bookId);
   return readJsonFile(createBookPaths(workspacePaths, bookId).chaptersIndexFile, chaptersIndexSchema, []);
 }
 
+/** 写入章节索引（整体覆盖）。 */
 async function writeChapters(workspacePaths: WorkspacePaths, bookId: string, chapters: ChapterRecord[]) {
   await writeJsonFile(createBookPaths(workspacePaths, bookId).chaptersIndexFile, chapters);
 }
 
+/** 章节正文文件路径：chapters/{chapterId}.md，经 resolveInsideRoot 防路径穿越。 */
 function chapterPath(workspacePaths: WorkspacePaths, bookId: string, chapter: ChapterRecord) {
   return resolveInsideRoot(createBookPaths(workspacePaths, bookId).chaptersDir, `${chapter.id}.md`);
 }
 
+/** 章节列表。 */
 export async function listChapters(workspacePaths: WorkspacePaths, bookId: string) {
   return readChapters(workspacePaths, bookId);
 }
 
+/** 创建章节：章节号默认取当前数量 +1，生成稳定可读的 ID，写入正文文件并刷新作品进度。 */
 export async function createChapter(workspacePaths: WorkspacePaths, bookId: string, body: unknown) {
   const input = chapterCreateInputSchema.parse(body);
   const chapters = await readChapters(workspacePaths, bookId);
@@ -84,6 +95,7 @@ export async function createChapter(workspacePaths: WorkspacePaths, bookId: stri
   return getChapter(workspacePaths, bookId, id);
 }
 
+/** 读取章节元数据与正文文件内容。 */
 export async function getChapter(workspacePaths: WorkspacePaths, bookId: string, chapterId: string) {
   const chapters = await readChapters(workspacePaths, bookId);
   const chapter = chapters.find((item) => item.id === chapterId);
@@ -99,6 +111,7 @@ export async function getChapter(workspacePaths: WorkspacePaths, bookId: string,
   };
 }
 
+/** 更新章节：内容、标题、细纲、摘要与状态均可部分更新，重算字数并刷新作品进度。 */
 export async function updateChapter(workspacePaths: WorkspacePaths, bookId: string, chapterId: string, body: unknown) {
   const input = chapterUpdateInputSchema.parse(body);
   const chapters = await readChapters(workspacePaths, bookId);
@@ -130,6 +143,12 @@ export async function updateChapter(workspacePaths: WorkspacePaths, bookId: stri
   return getChapter(workspacePaths, bookId, chapterId);
 }
 
+/**
+ * AI 续写章节主流程（以 Agent Run 方式执行，全部阶段可追踪）：
+ * 1. 场景分类与写作风格运行时解析（含版本降级）；2. 生成初稿；
+ * 3. 本地风格/去 AI 味检查 + 语义审稿，未通过且可修订时生成修订稿并复检；
+ * 4. 汇总降级原因返回，AI 结果不写入章节正文。
+ */
 export async function continueChapter(workspacePaths: WorkspacePaths, bookId: string, chapterId: string, body: unknown) {
   const input = chapterAiTaskInputSchema.parse(body);
   const book = await getBook(workspacePaths, bookId);
@@ -154,6 +173,7 @@ export async function continueChapter(workspacePaths: WorkspacePaths, bookId: st
     },
     async (runContext) => {
   runContext.setStage("classify_scene");
+  // 先解析运行时上下文：场景分类、风格版本解析（可能降级）、去 AI 味策略与编译后的约束
   const runtime = await resolveWritingStyleRuntimeContext(workspacePaths, {
     book,
     outline: chapter.outline,
@@ -168,6 +188,7 @@ export async function continueChapter(workspacePaths: WorkspacePaths, bookId: st
   const { style, version: styleVersion, versionResolution, scene, adjustment: sceneAdjustment, antiAiPolicy, compiledV2, generationPrompt, reviewPrompt } = runtime;
   if (scene.tokenUsage) runContext.addTokenUsage("sceneClassification", scene.tokenUsage);
 
+  // 无写作模型时直接失败（不降级为空草稿），提示用户先配置模型路由
   if (!writingModel) {
     throw badRequest("尚未配置可用的写作模型，无法生成真实章节草稿", {
       writingStyleId: style?.id ?? null
@@ -218,6 +239,7 @@ export async function continueChapter(workspacePaths: WorkspacePaths, bookId: st
       ? evaluateWritingStyleCompliance(result.text, featureProfile)
       : null;
   const initialAntiAi = evaluateAntiAiCompliance(result.text, antiAiPolicy);
+  // 仅当有编译版本/特征画像可用于评估，或存在明显的审稿不通过时，才调用语义审稿（省 token 且更快）
   const shouldRunSemanticReview = Boolean(styleVersion && compiledV2)
     || !initialAntiAi.passed
     || Boolean(initialCompliance && !initialCompliance.passed);
@@ -257,6 +279,7 @@ export async function continueChapter(workspacePaths: WorkspacePaths, bookId: st
   if (generationPrompt && !initialCombinedReview.passed && revisionInstruction) {
     try {
     runContext.setStage("revise");
+    // 修订只针对风格偏差，禁止改动剧情事实；修订失败不中断流程，保留初始草稿并记录降级原因
     const revisionPrompt = assembleStyleRevisionPrompt({
       policyPrompt: generationPrompt,
       memoryPrompt: memorySelection.prompt,
@@ -304,6 +327,7 @@ export async function continueChapter(workspacePaths: WorkspacePaths, bookId: st
     });
     revisionCount = 1;
     } catch (error) {
+      // 修订（含复检）失败：保留初始草稿，把失败原因写入降级清单而不是中断整个 Run
       revisionFailure = `自动修订失败，已保留初始草稿：${error instanceof Error ? error.message : String(error)}`;
     }
   }
@@ -375,6 +399,7 @@ export async function continueChapter(workspacePaths: WorkspacePaths, bookId: st
   );
 }
 
+/** 读取路由配置的写作模型：路由未配置或模型已停用则返回 null。 */
 async function getRoutedWritingModel(workspacePaths: WorkspacePaths) {
   const routes = await getModelRoutes(workspacePaths);
   if (!routes.writingModelId) return null;
@@ -382,6 +407,10 @@ async function getRoutedWritingModel(workspacePaths: WorkspacePaths) {
   return config.enabled ? config : null;
 }
 
+/**
+ * 按六层装配正文生成 Prompt：稳定规则 > 作品事实 > 用户偏好 > 场景上下文 > 技能 > 本次指令。
+ * 各来源带优先级与预算，由 PromptAssembler 统一截断（当前指令层最小保留）。
+ */
 function assembleChapterPrompt(input: {
   bookTitle: string;
   genre: string;
@@ -480,6 +509,7 @@ ${input.policyPrompt ? `\n【正文生成约束】\n${input.policyPrompt}` : ""}
   ]);
 }
 
+/** 把审稿 Prompt 的预算映射到配置中的各层 token 预算。 */
 function createReviewPromptBudgets(config: Awaited<ReturnType<ConfigRepository["readOrCreate"]>>) {
   return {
     stable: config.context.budgets.stableMaxTokens,
@@ -491,6 +521,7 @@ function createReviewPromptBudgets(config: Awaited<ReturnType<ConfigRepository["
   };
 }
 
+/** 按六层装配修订 Prompt：只输出修订后完整正文，禁止改动剧情事实与信息顺序。 */
 function assembleStyleRevisionPrompt(input: {
   policyPrompt: string;
   memoryPrompt: string;
@@ -545,11 +576,13 @@ function assembleStyleRevisionPrompt(input: {
   ]);
 }
 
+/** 按目标字数推算输出上限：默认 2800，按 1.6 倍放大并收敛到 800-6000，防止溢出上下文。 */
 function calculateChapterMaxTokens(chapterWords: number | null) {
   if (!chapterWords) return 2800;
   return Math.min(6000, Math.max(800, Math.ceil(chapterWords * 1.6)));
 }
 
+/** 重算作品进度：总字数、已写章数与当前章节，保持 book.json 与章节索引一致。 */
 async function updateBookProgress(workspacePaths: WorkspacePaths, bookId: string) {
   const book = await getBook(workspacePaths, bookId);
   const chapters = await readChapters(workspacePaths, bookId);

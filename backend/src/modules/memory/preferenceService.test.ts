@@ -1,3 +1,4 @@
+// 测试：偏好记忆服务与仓储的状态机流转。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

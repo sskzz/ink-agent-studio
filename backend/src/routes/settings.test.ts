@@ -1,3 +1,4 @@
+// 设置路由测试：读取/乐观锁更新生效配置、响应不泄露密钥、revision 冲突返回 409。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -22,6 +22,23 @@ import type { WorkspacePaths } from "../workspace/workspacePaths.js";
 import { ensureDirectory } from "../../utils/fileStore.js";
 import { writeJsonFile } from "../../utils/jsonStore.js";
 import type { RunExecutionContext } from "./runCoordinator.js";
+import { writeFactCards } from "../books/factRepository.js";
+import type { FactCard } from "../../schemas/factSchemas.js";
+import {
+  appendFactContext,
+  appendRepairIssues,
+  buildSummaryFactCards,
+  extractBackboneFacts,
+  extractFoundationFacts,
+  extractWorldFacts,
+  normalizeLockedBookFields,
+  verifyBackboneInitialStateConsistency,
+  verifyBackboneOutlineConsistency,
+  verifyBackboneReferences,
+  verifyOutlineStateConsistency,
+  verifyRequirementsBackboneConsistency,
+  verifySupportingBackboneConsistency
+} from "./initializationFacts.js";
 
 const identifierSchema = z.string().regex(/^[a-z][a-z0-9-]{2,63}$/);
 const shortText = z.string().trim().min(1).max(500);
@@ -107,6 +124,24 @@ const entityRequirementSchema = z.object({
   nameHint: shortText,
   purpose: shortText,
   firstUse: shortText
+});
+
+const backboneEventSchema = z.object({
+  id: identifierSchema,
+  title: shortText,
+  detail: shortText,
+  relatedEntityIds: z.array(identifierSchema).max(8)
+});
+
+const storyBackboneSchema = z.object({
+  schemaVersion: z.literal("book-story-backbone.v1"),
+  startEvents: z.array(backboneEventSchema.extend({
+    status: z.enum(["happened", "ongoing"])
+  })).min(1).max(20),
+  keyEvents: z.array(backboneEventSchema.extend({
+    volumeIndex: z.number().int().min(1).max(100)
+  })).min(1).max(40),
+  timelineNote: shortText
 });
 
 const volumeOutlineSchema = z.object({
@@ -207,20 +242,22 @@ const reviewSchema = z.object({
   summary: shortText
 });
 
-type Foundation = z.infer<typeof foundationSchema>;
-type World = z.infer<typeof worldSchema>;
-type StoryGraph = z.infer<typeof storyGraphSchema>;
-type OutlinePlan = z.infer<typeof outlinePlanSchema>;
-type EntityRequirements = z.infer<typeof entityRequirementsSchema>;
-type Outline = z.infer<typeof outlineSchema>;
-type SupportingEntities = z.infer<typeof supportingEntitiesSchema>;
-type Items = z.infer<typeof itemsSchema>;
-type StateBundle = z.infer<typeof stateBundleSchema>;
+export type Foundation = z.infer<typeof foundationSchema>;
+export type World = z.infer<typeof worldSchema>;
+export type StoryGraph = z.infer<typeof storyGraphSchema>;
+export type StoryBackbone = z.infer<typeof storyBackboneSchema>;
+export type OutlinePlan = z.infer<typeof outlinePlanSchema>;
+export type EntityRequirements = z.infer<typeof entityRequirementsSchema>;
+export type Outline = z.infer<typeof outlineSchema>;
+export type SupportingEntities = z.infer<typeof supportingEntitiesSchema>;
+export type Items = z.infer<typeof itemsSchema>;
+export type StateBundle = z.infer<typeof stateBundleSchema>;
 
-interface InitializationBundle {
+export interface InitializationBundle {
   foundation: Foundation;
   world: World;
   storyGraph: StoryGraph;
+  backbone: StoryBackbone;
   outline: Outline;
   supporting: SupportingEntities;
   items: Items;
@@ -289,82 +326,130 @@ export async function initializeBookWithAi(
     user: `基于以下输入生成作品基础设置与故事基石。lockedFields 对应的当前值不得改变；needsAiFill 字段必须生成实际内容。writingStyleId 只能从 availableWritingStyles 中选择；没有候选时必须为 null。只输出 book-foundation.v1 JSON。\n${stringifyPrompt(baseContext)}`,
     maxTokens: 3_500
   });
+  const normalizedFoundation = normalizeLockedBookFields(book, foundation);
   const writingStyle = resolveWritingStyleSelection(book, foundation.book.writingStyleId, availableWritingStyles);
 
   const world = await runStage(context, "world", worldSchema, models.planning, generate, paths, {
     system: commonSystemPrompt("小说世界观架构"),
-    user: `根据故事基石生成世界骨架。authoritativeWorld 是用户权威设定，必须保留其事实，只补足缺口。ID 使用小写英文和连字符。只输出 book-world.v1 JSON。\n${stringifyPrompt({ foundation, authoritativeWorld: sourceFiles.world })}`,
+    user: `根据故事基石生成世界骨架。authoritativeWorld 是用户权威设定，必须保留其事实，只补足缺口。ID 使用小写英文和连字符。只输出 book-world.v1 JSON。\n${stringifyPrompt({ foundation: normalizedFoundation, authoritativeWorld: sourceFiles.world })}`,
     maxTokens: 4_500
   });
 
+  const factCards: FactCard[] = [
+    ...extractFoundationFacts(book, normalizedFoundation),
+    ...extractWorldFacts(world)
+  ];
+
   const storyGraph = await runStage(context, "story_graph", storyGraphSchema, models.planning, generate, paths, {
     system: commonSystemPrompt("小说核心人物与势力关系"),
-    user: `生成只包含主角、核心对手、关键配角和核心势力的关系图。人物 factionIds 必须引用本次 factions 的 ID，关系端点必须存在。只输出 book-story-graph.v1 JSON。\n${stringifyPrompt({ foundation, world })}`,
+    user: appendFactContext(`生成只包含主角、核心对手、关键配角和核心势力的关系图。人物 factionIds 必须引用本次 factions 的 ID，关系端点必须存在。只输出 book-story-graph.v1 JSON。\n${stringifyPrompt({ foundation: normalizedFoundation, world })}`, factCards),
     maxTokens: 5_500
   });
 
   validateStoryGraph(storyGraph);
 
-  const outline = await runOutlineStages(context, models.planning, generate, paths, { foundation, world, storyGraph });
+  const maxRepairRounds = 2;
+  let repairIssues: string[] = [];
 
-  const supporting = await runStage(context, "supporting_entities", supportingEntitiesSchema, models.planning, generate, paths, {
-    system: commonSystemPrompt("小说地点与次要角色设定"),
-    user: `按 requiredEntities 逐项生成地点和次要角色，不要增加无剧情用途的实体。regionId 必须引用世界 regions，controllerFactionId 和人物 factionIds 必须引用核心势力。只输出 book-supporting-entities.v1 JSON。\n${stringifyPrompt({ world, storyGraph, outline })}`,
-    maxTokens: 6_000
-  });
+  for (let round = 0; round <= maxRepairRounds; round += 1) {
+    const forceRegenerate = round > 0;
+    const issues = round > 0 ? repairIssues : [];
 
-  validateSupporting(world, storyGraph, supporting);
+    const backbone = await runStage(context, "story_backbone", storyBackboneSchema, models.planning, generate, paths, {
+      system: commonSystemPrompt("小说关键事件时间线骨架"),
+      user: appendRepairIssues(appendFactContext(`生成故事开篇时已经发生或正在进行的事件（startEvents）和贯穿全书的关键事件序列（keyEvents）。startEvents 是故事开始时读者应视为既成事实的内容（如主角已激活某系统、某人已失踪）；keyEvents 必须标注归属卷（volumeIndex）且同一事件只能出现一次；卷纲阶段只能延续本骨架，不得重新安排 startEvents。所有 relatedEntityIds 必须引用本次核心人物或势力 ID。只输出 book-story-backbone.v1 JSON。\n${stringifyPrompt({ foundation: normalizedFoundation, world, storyGraph })}`, factCards), issues),
+      maxTokens: 4_000
+    }, { forceRegenerate });
 
-  const items = await runStage(context, "items", itemsSchema, models.planning, generate, paths, {
-    system: commonSystemPrompt("小说关键物品设定"),
-    user: `按 requiredEntities.items 生成关键物品。ownerEntityId 与 locationId 必须引用已存在实体；每个物品必须有限制和明确剧情用途。只输出 book-items.v1 JSON。\n${stringifyPrompt({ storyGraph, outline, supporting })}`,
-    maxTokens: 4_500
-  });
+    verifyBackboneReferences(backbone, storyGraph);
+    const roundFacts: FactCard[] = [...factCards, ...extractBackboneFacts(backbone)];
 
-  validateItems(storyGraph, supporting, items);
+    const outline = await runOutlineStages(
+      context,
+      models.planning,
+      generate,
+      paths,
+      { foundation: normalizedFoundation, world, storyGraph, backbone },
+      roundFacts,
+      issues,
+      forceRegenerate
+    );
 
-  const state = await runStage(context, "initial_state", stateBundleSchema, models.planning, generate, paths, {
-    system: commonSystemPrompt("小说初始状态与伏笔规划"),
-    user: `生成故事开篇时的权威状态和伏笔池。所有实体引用必须存在，伏笔投放必须早于回收。只输出 book-initial-state.v1 JSON。\n${stringifyPrompt({ foundation, world, storyGraph, outline, supporting, items })}`,
-    maxTokens: 5_500
-  });
+    verifyBackboneOutlineConsistency(backbone, outline);
 
-  const bundle = { foundation, world, storyGraph, outline, supporting, items, state } satisfies InitializationBundle;
-  validateBundle(bundle);
+    const supporting = await runStage(context, "supporting_entities", supportingEntitiesSchema, models.planning, generate, paths, {
+      system: commonSystemPrompt("小说地点与次要角色设定"),
+      user: appendRepairIssues(appendFactContext(`按 requiredEntities 逐项生成地点和次要角色，不要增加无剧情用途的实体。regionId 必须引用世界 regions，controllerFactionId 和人物 factionIds 必须引用核心势力；firstUse 必须引用时间线骨架中已存在的事件，不得安排新的同类型事件。只输出 book-supporting-entities.v1 JSON。\n${stringifyPrompt({ world, storyGraph, backbone, outline })}`, roundFacts), issues),
+      maxTokens: 6_000
+    }, { forceRegenerate });
 
-  const review = await runStage(context, "consistency_review", reviewSchema, models.review, generate, paths, {
-    system: commonSystemPrompt("小说初始化一致性审查"),
-    user: `检查以下初始化 Bundle 是否存在阻断写入的硬冲突。只有悬空引用、违反锁定设定、因果矛盾或时间顺序错误才标记 blocking。lockedBook 和 authoritativeSources 是不可覆盖的用户事实。只输出 book-initialization-review.v1 JSON。\n${stringifyPrompt({ lockedBook: book, authoritativeSources: { brief: sourceFiles.brief, world: sourceFiles.world }, bundle }, 60_000)}`,
-    maxTokens: 2_500,
-    temperature: 0.1
-  });
+    validateSupporting(world, storyGraph, supporting);
+    verifySupportingBackboneConsistency(supporting, backbone);
 
-  if (!review.passed || review.issues.some((issue) => issue.severity === "blocking")) {
-    throw new Error(`作品初始化一致性审查未通过：${review.issues.map((issue) => issue.message).join("；") || review.summary}`);
+    const items = await runStage(context, "items", itemsSchema, models.planning, generate, paths, {
+      system: commonSystemPrompt("小说关键物品设定"),
+      user: appendRepairIssues(appendFactContext(`按 requiredEntities.items 生成关键物品。ownerEntityId 与 locationId 必须引用已存在实体；每个物品必须有限制和明确剧情用途。只输出 book-items.v1 JSON。\n${stringifyPrompt({ storyGraph, outline, supporting })}`, roundFacts), issues),
+      maxTokens: 4_500
+    }, { forceRegenerate });
+
+    validateItems(storyGraph, supporting, items);
+
+    const state = await runStage(context, "initial_state", stateBundleSchema, models.planning, generate, paths, {
+      system: commonSystemPrompt("小说初始状态与伏笔规划"),
+      user: appendRepairIssues(appendFactContext(`生成故事开篇时的权威状态和伏笔池。所有实体引用必须存在，伏笔投放必须早于回收；时间线骨架 startEvents 中已经发生的事件不得重复安排，卷纲中出现过的事件也不要重编。只输出 book-initial-state.v1 JSON。\n${stringifyPrompt({ foundation: normalizedFoundation, world, storyGraph, backbone, outline, supporting, items })}`, roundFacts), issues),
+      maxTokens: 5_500
+    }, { forceRegenerate });
+
+    const bundle = { foundation: normalizedFoundation, world, storyGraph, backbone, outline, supporting, items, state } satisfies InitializationBundle;
+    validateBundle(bundle);
+    verifyOutlineStateConsistency(outline, state);
+    verifyBackboneInitialStateConsistency(backbone, state);
+
+    const review = await runStage(context, "consistency_review", reviewSchema, models.review, generate, paths, {
+      system: commonSystemPrompt("小说初始化一致性审查"),
+      user: appendRepairIssues(appendFactContext(`检查以下初始化 Bundle 是否存在阻断写入的硬冲突。只有悬空引用、违反锁定设定、与时间线骨架冲突、因果矛盾或时间顺序错误才标记 blocking。lockedBook 和 authoritativeSources 是不可覆盖的用户事实。只输出 book-initialization-review.v1 JSON。\n${stringifyPrompt({ lockedBook: book, authoritativeSources: { brief: sourceFiles.brief, world: sourceFiles.world }, bundle }, 45_000)}`, roundFacts), issues),
+      maxTokens: 2_500,
+      temperature: 0.1
+    }, { forceRegenerate });
+
+    const blockingIssues = review.issues
+      .filter((issue) => issue.severity === "blocking")
+      .map((issue) => issue.message);
+    if (review.passed && blockingIssues.length === 0) {
+      if (round > 0) context.emitProgress({ message: `一致性审查通过（第 ${round + 1} 轮修复后）。` });
+      context.setStage("apply_bundle");
+      context.emitProgress({ message: "一致性检查通过，正在自动写入作品信息。" });
+      const applied = await applyInitializationBundle(
+        paths,
+        context.runId,
+        book,
+        bundle,
+        sourceFiles,
+        writingStyle,
+        [...roundFacts, ...buildSummaryFactCards(bundle)],
+        context.signal
+      );
+      const artifact = context.saveArtifact("book-initialization-bundle.v1", bundle);
+      context.saveCheckpoint("apply_bundle", { artifactId: artifact.id, applied }, false);
+      context.markCommitted?.();
+      return {
+        artifactType: "book_initialization_bundle",
+        approvalRequired: false,
+        bookId: book.id,
+        generatedFiles: ["brief.md", "outline.md", "world.md", "state/current.md", "state/foreshadowing.md"],
+        generatedEntities: applied.generatedEntities,
+        review
+      };
+    }
+    repairIssues = blockingIssues.length > 0 ? blockingIssues : [review.summary || "未说明具体问题"];
+    if (round === maxRepairRounds) {
+      context.emitProgress({ message: `一致性审查最终未通过，写入中止：${repairIssues.join("；")}` });
+      throw new Error(`作品初始化一致性审查未通过：${repairIssues.join("；")}`);
+    }
+    context.emitProgress({ message: `一致性审查未通过，开始第 ${round + 1} 轮定向修复（最多 ${maxRepairRounds} 轮）。` });
   }
 
-  context.setStage("apply_bundle");
-  context.emitProgress({ message: "一致性检查通过，正在自动写入作品信息。" });
-  const applied = await applyInitializationBundle(
-    paths,
-    context.runId,
-    book,
-    bundle,
-    sourceFiles,
-    writingStyle,
-    context.signal
-  );
-  const artifact = context.saveArtifact("book-initialization-bundle.v1", bundle);
-  context.saveCheckpoint("apply_bundle", { artifactId: artifact.id, applied }, false);
-  context.markCommitted?.();
-  return {
-    artifactType: "book_initialization_bundle",
-    approvalRequired: false,
-    bookId: book.id,
-    generatedFiles: ["brief.md", "outline.md", "world.md", "state/current.md", "state/foreshadowing.md"],
-    generatedEntities: applied.generatedEntities,
-    review
-  };
+  throw new Error("作品初始化流程异常退出");
 }
 
 async function resolveModels(paths: WorkspacePaths, dependencies: InitializationDependencies) {
@@ -386,17 +471,20 @@ async function runStage<T>(
   model: ModelConfigRecord,
   generate: NonNullable<InitializationDependencies["generateText"]>,
   paths: WorkspacePaths,
-  prompt: { system: string; user: string; maxTokens: number; temperature?: number }
+  prompt: { system: string; user: string; maxTokens: number; temperature?: number },
+  options: { forceRegenerate?: boolean } = {}
 ) {
   context.setStage(stage);
   const artifactType = `book-initialization.${stage}.v1`;
-  const cachedArtifact = context.loadArtifact(artifactType);
-  if (cachedArtifact) {
-    const cached = schema.safeParse(cachedArtifact.value);
-    if (cached.success) {
-      context.emitProgress({ message: `${stage} 已从检查点恢复`, artifactId: cachedArtifact.id });
-      context.saveCheckpoint(stage, { artifactId: cachedArtifact.id, contentHash: cachedArtifact.contentHash }, true);
-      return cached.data;
+  if (!options.forceRegenerate) {
+    const cachedArtifact = context.loadArtifact(artifactType);
+    if (cachedArtifact) {
+      const cached = schema.safeParse(cachedArtifact.value);
+      if (cached.success) {
+        context.emitProgress({ message: `${stage} 已从检查点恢复`, artifactId: cachedArtifact.id });
+        context.saveCheckpoint(stage, { artifactId: cachedArtifact.id, contentHash: cachedArtifact.contentHash }, true);
+        return cached.data;
+      }
     }
   }
   context.emitProgress({ message: `正在生成 ${stage}` });
@@ -437,9 +525,12 @@ async function runOutlineStages(
   model: ModelConfigRecord,
   generate: NonNullable<InitializationDependencies["generateText"]>,
   paths: WorkspacePaths,
-  input: { foundation: Foundation; world: World; storyGraph: StoryGraph }
+  input: { foundation: Foundation; world: World; storyGraph: StoryGraph; backbone: StoryBackbone },
+  factCards: FactCard[],
+  repairIssues: string[] = [],
+  forceRegenerate = false
 ): Promise<Outline> {
-  const cachedArtifact = context.loadArtifact("book-initialization.outline.v1");
+  const cachedArtifact = forceRegenerate ? null : context.loadArtifact("book-initialization.outline.v1");
   if (cachedArtifact) {
     const cached = outlineSchema.safeParse(cachedArtifact.value);
     if (cached.success) {
@@ -452,14 +543,15 @@ async function runOutlineStages(
 
   const plan: OutlinePlan = await runStage(context, "outline_plan", outlinePlanSchema, model, generate, paths, {
     system: commonSystemPrompt("长篇小说总纲与分卷规划"),
-    user: `生成全书主线与分卷推进，不生成实体清单。预计章节数应与 plannedWords/chapterWords 基本一致；分卷数量应为支撑剧情所需的最少数量，每项内容保持简洁具体。只输出 book-outline-plan.v1 JSON。\n${stringifyPrompt(input)}`,
+    user: appendRepairIssues(appendFactContext(`生成全书主线与分卷推进，不生成实体清单。预计章节数应与 plannedWords/chapterWords 基本一致；分卷数量应为支撑剧情所需的最少数量，每项内容保持简洁具体。卷纲必须延续 story_backbone：keyEvents 按其 volumeIndex 归属各卷，startEvents 中已经发生的事件不得重新安排。只输出 book-outline-plan.v1 JSON。\n${stringifyPrompt(input)}`, factCards), repairIssues),
     maxTokens: 4_200
-  });
+  }, { forceRegenerate });
   const requirements: EntityRequirements = await runStage(context, "entity_requirements", entityRequirementsSchema, model, generate, paths, {
     system: commonSystemPrompt("小说剧情实体需求规划"),
-    user: `根据已完成的分卷规划，生成确有剧情用途的地点、次要角色和关键物品需求。不要生成完整设定，只列出后续阶段必须补全的最少实体；ID 使用小写英文和连字符。只输出 book-entity-requirements.v1 JSON。\n${stringifyPrompt({ world: input.world, storyGraph: input.storyGraph, outlinePlan: plan })}`,
+    user: appendRepairIssues(appendFactContext(`根据已完成的分卷规划，生成确有剧情用途的地点、次要角色和关键物品需求。不要生成完整设定，只列出后续阶段必须补全的最少实体；ID 使用小写英文和连字符。只输出 book-entity-requirements.v1 JSON。\n${stringifyPrompt({ world: input.world, storyGraph: input.storyGraph, outlinePlan: plan })}`, factCards), repairIssues),
     maxTokens: 3_200
-  });
+  }, { forceRegenerate });
+  verifyRequirementsBackboneConsistency(requirements, input.backbone);
   const outline = outlineSchema.parse({
     schemaVersion: "book-outline.v1",
     mainLine: plan.mainLine,
@@ -547,7 +639,12 @@ function commonSystemPrompt(role: string) {
   return `你是${role}。严格根据输入工作，不覆盖用户锁定事实，不使用“待补充”或占位文本。所有 ID 使用小写英文字母、数字和连字符。只输出合法 JSON。`;
 }
 
-function stringifyPrompt(value: unknown, limit = 40_000) {
+/**
+ * 前序产物序列化注入：默认 30_000 字符（约 1 万 token）上限——太短缺少背景易答非所问，
+ * 太长噪声与冲突上升；前情必要内容由【不可变事实】+【已确认设定摘要】两个分片补充，
+ * 这里只保留本阶段直接依赖的结构化产物。
+ */
+function stringifyPrompt(value: unknown, limit = 30_000) {
   const serialized = JSON.stringify(value);
   return serialized.length <= limit ? serialized : serialized.slice(0, limit);
 }
@@ -628,6 +725,7 @@ async function applyInitializationBundle(
   bundle: InitializationBundle,
   sourceFiles: CoreFileSources,
   writingStyle: WritingStyleSelection | null,
+  factCards: FactCard[],
   signal: AbortSignal
 ) {
   signal.throwIfAborted();
@@ -702,6 +800,8 @@ async function applyInitializationBundle(
     await saveBook(paths, nextBook);
     signal.throwIfAborted();
     await replaceGeneratedEntities(paths, originalBook.id, generatedEntities);
+    signal.throwIfAborted();
+    await writeFactCards(paths, originalBook.id, factCards);
     signal.throwIfAborted();
   } catch (error) {
     const rollback = await Promise.allSettled([

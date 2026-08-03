@@ -95,6 +95,11 @@ export class RunEventStore {
     private readonly eventHub?: RunEventHub
   ) {}
 
+  /**
+   * 创建 Run 快照并写入 run_created / run_queued 事件（同一事务）。
+   * 入参：command 命令、父子关系、session/触发消息、配置版本与哈希。
+   * 失败处理：父 Run、Session、触发消息任一不满足约束都会抛出冲突/未找到错误并整体回滚。
+   */
   createRun(input: CreateRunInput) {
     const id = input.id ?? randomUUID();
     const createdAt = input.createdAt ?? new Date().toISOString();
@@ -181,18 +186,27 @@ export class RunEventStore {
     return this.getRun(id);
   }
 
+  /**
+   * 追加一条运行事件（事务内写入 + 投影更新），落库成功后推送给在线 SSE 订阅者。
+   * 返回值：事件记录与更新后的 Run 快照。
+   */
   appendEvent(runId: string, input: AppendRunEventInput) {
     const result = this.runtimeDatabase.transaction((database) => appendEventInTransaction(database, runId, input));
     if (result.inserted) this.eventHub?.publish(result.event);
     return { event: result.event, snapshot: this.getRun(runId) };
   }
 
+  /** 读取 Run 快照；不存在时抛 notFound。 */
   getRun(runId: string) {
     const row = readRunRow(this.runtimeDatabase.database, runId);
     if (!row) throw notFound("运行记录不存在", { runId });
     return mapRunRow(row);
   }
 
+  /**
+   * 按 seq 续接读取事件（SSE 重放与断点续接使用）。
+   * 入参：afterSeq——只返回大于该序号的事件（默认 -1 全量）；limit——最多条数（默认 5000）。
+   */
   listEvents(runId: string, options: { afterSeq?: number; limit?: number } = {}) {
     if (!readRunRow(this.runtimeDatabase.database, runId)) {
       throw notFound("运行记录不存在", { runId });
@@ -209,6 +223,7 @@ export class RunEventStore {
     `).all(runId, afterSeq, limit).map(mapEventRow);
   }
 
+  /** 按状态集合列出 Run（启动恢复与中断扫描使用，按创建时间升序）。 */
   listRunsByStatus(statuses: RunSnapshot["status"][], limit = 10_000) {
     if (statuses.length === 0) return [];
     const placeholders = statuses.map(() => "?").join(", ");
@@ -220,6 +235,7 @@ export class RunEventStore {
     `).all(...statuses, Math.min(100_000, Math.max(1, Math.trunc(limit)))).map(mapRunRow);
   }
 
+  /** 列出 Run（可按作品过滤，按创建时间倒序，limit 默认 100 上限 1000）。 */
   listRuns(options: { bookId?: string; limit?: number } = {}) {
     const limit = Math.min(1_000, Math.max(1, Math.trunc(options.limit ?? 100)));
     if (options.bookId) {
@@ -232,6 +248,7 @@ export class RunEventStore {
     ).all(limit).map(mapRunRow);
   }
 
+  /** 列出该 Run 的全部模型尝试（Token/耗时/成本审计），按开始时间排序。 */
   listModelAttempts(runId: string) {
     if (!readRunRow(this.runtimeDatabase.database, runId)) {
       throw notFound("运行记录不存在", { runId });
@@ -241,6 +258,11 @@ export class RunEventStore {
     ).all(runId).map(mapModelAttemptRow);
   }
 
+  /**
+   * 保存内联 JSON 工件（阶段产物，支持检查点恢复复用）。
+   * 入参：artifactType——类型键；value——结构化数据。
+   * 返回值：工件记录（含内容哈希与字节数）。
+   */
   saveInlineArtifact(runId: string, input: {
     id?: string;
     artifactType: string;
@@ -285,6 +307,7 @@ export class RunEventStore {
     return record;
   }
 
+  /** 读取指定类型的最新内联工件；无记录返回 null（检查点恢复的读取端）。 */
   getLatestInlineArtifact(runId: string, artifactType: string): RunArtifactRecord | null {
     if (!readRunRow(this.runtimeDatabase.database, runId)) {
       throw notFound("运行记录不存在", { runId });
@@ -298,6 +321,10 @@ export class RunEventStore {
     return row ? mapArtifactRow(row) : null;
   }
 
+  /**
+   * 保存检查点：追加 checkpoint_saved 事件并写入 run_checkpoints（同一事务）。
+   * 入参：stage——阶段名；checkpoint——恢复数据；resumable——是否允许中断后恢复。
+   */
   saveCheckpoint(runId: string, input: {
     id?: string;
     stage: string;
@@ -335,6 +362,11 @@ export class RunEventStore {
     return result.checkpoint;
   }
 
+  /**
+   * 登记一次模型尝试（running 状态），并追加 model_attempt_started 事件。
+   * 入参：runId 与尝试元信息（阶段、用途、模型、轮次）。
+   * 返回值：attempt 记录（含 id，供 finishModelAttempt 收尾）。
+   */
   startModelAttempt(runId: string, input: {
     id?: string;
     stage?: string | null;
@@ -379,6 +411,10 @@ export class RunEventStore {
     return result.attempt;
   }
 
+  /**
+   * 结束模型尝试：写入终态（成功/失败/超时/取消）与 Token/耗时/成本，追加完成事件。
+   * 入参：attemptId——startModelAttempt 返回的 id；input——终态与审计字段。
+   */
   finishModelAttempt(attemptId: string, input: {
     status: Exclude<ModelAttempt["status"], "running">;
     promptTokens?: number | null;

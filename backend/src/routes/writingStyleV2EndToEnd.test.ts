@@ -1,3 +1,4 @@
+// 写作风格 v2 端到端测试：重建不可变版本并固定到作品，生成/润色使用同一版本与约束 hash。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

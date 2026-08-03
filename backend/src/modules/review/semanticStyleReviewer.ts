@@ -1,3 +1,9 @@
+/**
+ * 语义风格审稿器。
+ * 职责：用审稿模型对正文做一次结构化语义审查（去 AI 味 + 风格偏差），输出符合 semantic-style-review.v1 契约的 JSON 报告；
+ * 边界：模型不可用时返回 review=null + degradedReason（由上层合并为降级结论）；模型输出非法 JSON 时自动重试一次「修复」请求；
+ * 本模块只产出语义层结论，本地量化层（风格度量/反 AI 规则）在 reviewService 中执行。
+ */
 import { z } from "zod";
 import type { WritingStyleVersion } from "../../schemas/styleVersionSchemas.js";
 import { generateModelText } from "../ai/modelGateway.js";
@@ -6,6 +12,7 @@ import type { WorkspacePaths } from "../workspace/workspacePaths.js";
 import { PromptAssembler, type PromptAssembly } from "../prompts/promptAssembler.js";
 import { userMemoryPromptSourceLabel } from "../memory/memoryPromptPolicy.js";
 
+/** 语义审查的 Token 预算分区（与 PromptAssembler 分区一一对应）。 */
 export interface ReviewPromptBudgets {
   stable: number;
   facts: number;
@@ -15,6 +22,7 @@ export interface ReviewPromptBudgets {
   turn: number;
 }
 
+/** 语义审稿输出契约：violations 最多 12 条，每条的 evidence 为不超过 120 字的正文引用。 */
 export const semanticStyleReviewSchema = z.object({
   schemaVersion: z.literal("semantic-style-review.v1"),
   passed: z.boolean(),
@@ -32,6 +40,7 @@ export const semanticStyleReviewSchema = z.object({
 
 export type SemanticStyleReview = z.infer<typeof semanticStyleReviewSchema>;
 
+/** 兼容入口：与 reviewNovelWritingPolicy 行为一致。 */
 export async function reviewSemanticWritingStyle(
   paths: WorkspacePaths,
   input: { version: WritingStyleVersion; content: string; reviewPrompt: string; chapterContext: string }
@@ -39,7 +48,9 @@ export async function reviewSemanticWritingStyle(
   return reviewNovelWritingPolicy(paths, input);
 }
 
-/** 全局去 AI 味与写作风格共用一次结构化语义审稿；version 为空时只执行全局规则。 */
+/** 全局去 AI 味与写作风格共用一次结构化语义审稿；version 为空时只执行全局规则。
+ * @returns review 为 null 时 degradedReason 说明失败原因（未配置/停用/调用异常）
+ */
 export async function reviewNovelWritingPolicy(
   paths: WorkspacePaths,
   input: {
@@ -60,6 +71,7 @@ export async function reviewNovelWritingPolicy(
 }> {
   const assembledPrompt = assembleReviewPrompt(input);
   const routes = await getModelRoutes(paths);
+  // 审稿模型未路由/停用：直接返回 null 审查 + 降级原因，不抛错，保证主流程继续走本地检查
   if (!routes.reviewModelId) return { review: null, degradedReason: "未配置审稿模型，已仅使用本地量化检查。", modelConfigId: null, tokenUsage: [], promptTrace: assembledPrompt.trace };
   const model = await getModelConfig(paths, routes.reviewModelId);
   if (!model.enabled) return { review: null, degradedReason: "审稿模型已停用，已仅使用本地量化检查。", modelConfigId: model.id, tokenUsage: [], promptTrace: assembledPrompt.trace };
@@ -78,6 +90,8 @@ export async function reviewNovelWritingPolicy(
     try {
       return { review: parseReview(result.text), degradedReason: null, modelConfigId: model.id, tokenUsage, promptTrace: assembledPrompt.trace };
     } catch {
+      // 首次输出不合 schema：让模型按原判断修复为合法 JSON（只修复格式，不改判断）；
+      // 修复仍失败会抛到外层 catch，整体降级
       const repaired = await generateModelText(paths, model, {
         systemPrompt: "修复给定内容为合法 semantic-style-review.v1 JSON，只输出 JSON，不改变原判断。",
         userPrompt: result.text.slice(0, 10000),
@@ -94,6 +108,7 @@ export async function reviewNovelWritingPolicy(
   }
 }
 
+/** 组装审稿 Prompt：stable 规则 → 联合审稿标准 + 风格不可变规则 → 用户记忆 → 章节上下文与正文 → 技能 → 输出契约。 */
 function assembleReviewPrompt(input: {
   version?: WritingStyleVersion | null;
   content: string;
@@ -163,12 +178,14 @@ function assembleReviewPrompt(input: {
   ]);
 }
 
+/** 解析模型输出的 JSON（兼容带前后缀文本），并严格校验 schema；失败抛错触发上层修复/降级。 */
 function parseReview(text: string) {
   const first = text.indexOf("{");
   const last = text.lastIndexOf("}");
   return semanticStyleReviewSchema.parse(JSON.parse(first >= 0 && last > first ? text.slice(first, last + 1) : text));
 }
 
+/** 取风格不可变规则（V4 直接用 invariantRules，V3 映射 priority<=2 的规则），供审稿标准注入。 */
 function getInvariantRules(version?: WritingStyleVersion | null) {
   if (!version) return [];
   const semantic = version.semanticProfile;

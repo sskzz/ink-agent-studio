@@ -1,5 +1,10 @@
+/**
+ * 模型配置页选项数据：服务商下拉、用途下拉与用途中文标签。
+ * 与后端 ModelProvider / ModelPurpose 枚举保持一致，新增服务商或用途时同步维护此文件。
+ */
 import type { ModelProvider, ModelPurpose } from "@/shared/types/domain";
 
+/** 模型服务商下拉选项：value 与后端 ModelProvider 枚举对应，hint 作为下拉中的补充说明。 */
 export const providerOptions: Array<{ label: string; value: ModelProvider; hint: string }> = [
   { label: "OpenAI", value: "openai", hint: "OpenAI 官方 API，适合高质量规划、写作和审稿" },
   { label: "Azure OpenAI", value: "azure-openai", hint: "企业 Azure 部署，需配置资源域名和部署名" },
@@ -27,6 +32,7 @@ export const providerOptions: Array<{ label: string; value: ModelProvider; hint:
   { label: "Custom", value: "custom", hint: "自定义服务商或尚未内置的协议" }
 ];
 
+/** 模型用途下拉选项：与后端 ModelPurpose 枚举一一对应。 */
 export const purposeOptions: Array<{ label: string; value: ModelPurpose }> = [
   { label: "规划", value: "planning" },
   { label: "写作", value: "writing" },
@@ -35,6 +41,7 @@ export const purposeOptions: Array<{ label: string; value: ModelPurpose }> = [
   { label: "图片/封面", value: "image" }
 ];
 
+/** 用途值到中文标签的映射，供表格、徽章等非下拉场景直接取用。 */
 export const purposeLabel: Record<ModelPurpose, string> = {
   planning: "规划",
   writing: "写作",

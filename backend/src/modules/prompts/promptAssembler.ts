@@ -1,7 +1,13 @@
+/**
+ * 文件职责：按预算与优先级装配多来源 Prompt，并生成可审计的装配轨迹。
+ * 边界：纯字符串装配与 token 估算，不调用模型；层顺序固定，缺层或乱序直接报错。
+ */
 import { sha256 } from "../../utils/hash.js";
 
+/** Prompt 层名称：装配顺序固定为 stable → facts → memory → scene → skills → turn。 */
 export type PromptLayerName = "stable" | "facts" | "memory" | "scene" | "skills" | "turn";
 
+/** 单个 Prompt 来源：内容、优先级、token 预算（可选）与截断方向（默认保留尾部）。 */
 export interface PromptSource {
   id: string;
   label: string;
@@ -13,12 +19,14 @@ export interface PromptSource {
   sourceRef?: Record<string, unknown>;
 }
 
+/** Prompt 层输入：层名、预算与来源列表。 */
 export interface PromptLayerInput {
   name: PromptLayerName;
   budgetTokens: number;
   sources: PromptSource[];
 }
 
+/** 单层装配轨迹：预算、估算 token、内容哈希与每个来源的保留/截断情况。 */
 export interface PromptLayerTrace {
   name: PromptLayerName;
   budgetTokens: number;
@@ -34,6 +42,7 @@ export interface PromptLayerTrace {
   }>;
 }
 
+/** 装配结果：systemPrompt 为 stable 层，userPrompt 为其余各层拼接；trace 用于成本与一致性审计。 */
 export interface PromptAssembly {
   systemPrompt: string;
   userPrompt: string;
@@ -74,6 +83,7 @@ export class PromptAssembler {
   }
 }
 
+/** 粗略 token 估算：中文字符按 1 token、英文单词按 1、其他符号每 2 字符计 1，保底 1。 */
 export function estimateTokens(content: string) {
   const cjk = (content.match(/[\u3400-\u9fff\uf900-\ufaff]/g) ?? []).length;
   const nonCjk = content.replace(/[\u3400-\u9fff\uf900-\ufaff]/g, "");
@@ -82,6 +92,10 @@ export function estimateTokens(content: string) {
   return Math.max(1, cjk + latinWords + Math.ceil(other / 2));
 }
 
+/**
+ * 装配单层：先按各来源自身预算截断，再按优先级从低到高逐步缩减，直到整层不超预算；
+ * 低优先级来源先被裁掉（受各自 minTokens 保护），最终仍超预算时从头部整体截断。
+ */
 function assembleLayer(layer: PromptLayerInput) {
   if (!Number.isInteger(layer.budgetTokens) || layer.budgetTokens <= 0) {
     throw new Error(`${layer.name} Prompt 层预算必须是正整数`);
@@ -137,6 +151,7 @@ function assembleLayer(layer: PromptLayerInput) {
   return { content, trace };
 }
 
+/** 把内容截断到不超过 maxTokens：用二分查找确定最多可保留的字符数，head 保留开头、tail 保留结尾。 */
 function truncateToTokens(content: string, maxTokens: number, from: "head" | "tail") {
   if (maxTokens <= 0) return "";
   if (estimateTokens(content) <= maxTokens) return content;

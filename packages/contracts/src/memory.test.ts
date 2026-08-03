@@ -1,3 +1,6 @@
+/**
+ * 文件职责：memory.ts 契约的单元测试，覆盖偏好提议交叉校验与审批字面量校验。
+ */
 import { describe, expect, it } from "vitest";
 import {
   userPreferenceApprovalInputSchema,

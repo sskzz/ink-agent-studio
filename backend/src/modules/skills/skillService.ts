@@ -1,3 +1,8 @@
+/**
+ * 技能服务。
+ * 职责：技能的增删查改与「技能选择」——按操作类型、触发词、显式请求与优先级打分，在数量与 Token 预算内选出本轮技能并组装 Prompt；
+ * 边界：写操作受 writeApprovalRequired 配置约束（须显式审批）；技能只是工作流建议，无权写入文件或覆盖作品事实（由 Prompt 层约束）。
+ */
 import type {
   AppConfig,
   NovelSkillCreateInput,
@@ -12,20 +17,24 @@ import { SkillRepository } from "./skillRepository.js";
 export class SkillService {
   constructor(private readonly repository: SkillRepository) {}
 
+  /** 列出全部技能（含内置技能的自愈安装）。 */
   list() {
     return this.repository.list();
   }
 
+  /** 按 id 读取技能详情（含指令文本）。 */
   get(id: string) {
     return this.repository.get(id);
   }
 
+  /** 创建自定义技能：必须显式审批（防未确认写入），审批标记不落盘。 */
   async create(input: Omit<NovelSkillCreateInput, "approved"> & { approved: boolean }, config: AppConfig) {
     if (!input.approved) throw conflict("创建自定义技能需要明确审批", { setting: "skills.writeApprovalRequired" });
     const { approved: _approved, ...definition } = input;
     return this.repository.create(definition);
   }
 
+  /** 启停技能：配置要求确认时必须显式审批。 */
   async setEnabled(id: string, enabled: boolean, approved: boolean, config: AppConfig) {
     if (config.skills.writeApprovalRequired && !approved) {
       throw conflict("修改技能启用状态需要明确审批", { setting: "skills.writeApprovalRequired" });
@@ -33,6 +42,11 @@ export class SkillService {
     return this.repository.setEnabled(id, enabled);
   }
 
+  /**
+   * 选择本轮技能并组装 Prompt。
+   * 打分 = 优先级 + 触发词命中数×10 + 显式请求 +1000；显式请求或命中触发词才入围，
+   * 再按数量上限与 Token 预算逐个加载，超限技能记入 skipped。
+   */
   async select(
     input: NovelSkillPreviewInput,
     config: Pick<AppConfig, "skills" | "features">
@@ -54,6 +68,7 @@ export class SkillService {
     }
 
     const requested = new Set(input.requestedSkillIds);
+    // 匹配语料 = 用户指令 + 上下文，统一小写做触发词模糊匹配
     const corpus = `${input.instruction}\n${input.context}`.toLocaleLowerCase();
     const candidates = metadata
       .filter((skill) => skill.enabled && skill.appliesTo.includes(input.operation))
@@ -82,6 +97,7 @@ export class SkillService {
         continue;
       }
       const detail = await this.repository.get(candidate.skill.id);
+      // 预算保护：剩余 Token 不足时跳过（而不是截断后仍塞入，避免指令内容被腰斩失去效力）
       const budgetRemaining = config.skills.promptTokenBudget - totalTokens;
       if (budgetRemaining <= 0) {
         skipped.push({ id: candidate.skill.id, reason: "已达到技能 Token 预算" });
@@ -124,6 +140,7 @@ export class SkillService {
   }
 }
 
+/** 在 Token 预算内截断技能指令：超预算时二分逼近最长可容纳前缀。 */
 function truncateToTokens(content: string, maxTokens: number) {
   if (estimateTokens(content) <= maxTokens) return content;
   const chars = Array.from(content);

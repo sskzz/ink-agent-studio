@@ -1,3 +1,8 @@
+/**
+ * 模型配置状态层（Zustand）。
+ * 页面只调用 store 暴露的动作，不直接触碰 fetch；API 层负责与本地 Hono 后端通信。
+ * 每次增删改后都重新拉取快照（configs + usage + analysis），保证分析面板与列表始终一致。
+ */
 import { create } from "zustand";
 import {
   deleteModelConfig,
@@ -17,6 +22,7 @@ import type {
   ModelUsageSettings
 } from "@/shared/types/domain";
 
+/** 新建配置时的空表单草稿：默认 OpenAI 兼容协议与“写作”用途，降低首填成本。 */
 const emptyDraft: ModelConfigDraft = {
   name: "",
   provider: "openai-compatible",
@@ -30,6 +36,7 @@ const emptyDraft: ModelConfigDraft = {
   note: ""
 };
 
+/** 模型配置 store 状态切片：含列表、当前草稿、使用分配、加载/保存/测试等异步标志。 */
 interface ModelConfigState {
   analysis: ModelAnalysis | null;
   configs: ModelConfig[];
@@ -52,6 +59,7 @@ interface ModelConfigState {
   testDraft: () => Promise<void>;
 }
 
+/** 并行拉取配置列表、用途分配与分析结果，作为页面初始化和变更后的统一快照来源。 */
 async function loadModelSnapshot() {
   const [configs, usage, analysis] = await Promise.all([
     listModelConfigs(),
@@ -88,6 +96,7 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const { analysis, configs, usage } = await loadModelSnapshot();
+      // 默认选中列表首个配置并同步到草稿，保证表单区始终有内容可看。
       set({
         analysis,
         configs,
@@ -102,6 +111,7 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
   },
 
   selectConfig(config) {
+    // 切换选中项时清空上次的测试结果，避免旧结果误导用户。
     set({
       selectedId: config.id,
       draft: config,
@@ -120,6 +130,7 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
   },
 
   updateDraft(patch) {
+    // 任何草稿改动都会使已保存的测试结果失效，这里统一清空。
     set((state) => ({
       draft: {
         ...state.draft,
@@ -133,6 +144,7 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
     set({ saving: true, error: null });
     try {
       const saved = await saveModelConfig(get().draft);
+      // 保存成功后整表刷新，并用后端返回的最新配置回填草稿，避免本地与磁盘不一致。
       const { analysis, configs, usage } = await loadModelSnapshot();
       set({
         analysis,
@@ -151,6 +163,7 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
     set({ saving: true, error: null });
     try {
       await deleteModelConfig(id);
+      // 删除后选中项回落到列表第一项，草稿同步跟随，保证表单区不悬挂在已删除配置上。
       const { analysis, configs, usage } = await loadModelSnapshot();
       set({
         analysis,
@@ -171,6 +184,7 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
     try {
       const configs = await setDefaultModelConfig(id);
       const analysis = await getModelAnalysis();
+      // 若当前草稿正对应被设为默认的配置，用返回的列表项刷新其 isDefault 标记。
       set({
         analysis,
         configs,
@@ -204,6 +218,7 @@ export const useModelConfigStore = create<ModelConfigState>((set, get) => ({
   }
 }));
 
+/** 把任意 unknown 异常归一为可展示的中文错误文案。 */
 function toMessage(error: unknown) {
   return error instanceof Error ? error.message : "未知错误";
 }

@@ -1,3 +1,4 @@
+// 测试：writingStyleFeatures 特征提取与画像构建。
 import { describe, expect, it } from "vitest";
 import { createWritingStyleFeatureProfile, extractWritingStyleFeatures } from "./writingStyleFeatures.js";
 

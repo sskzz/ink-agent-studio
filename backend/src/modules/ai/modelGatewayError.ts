@@ -1,3 +1,9 @@
+/**
+ * 文件职责：模型网关统一的错误类型、错误分类与序列化。
+ * 边界：只定义错误语义（是否可重试、属于哪类失败），不发起任何请求。
+ */
+
+/** 错误种类：决定是否可重试、如何展示，以及审计状态如何落库。 */
 export type ModelGatewayErrorKind =
   | "timeout"
   | "cancelled"
@@ -8,6 +14,7 @@ export type ModelGatewayErrorKind =
   | "malformed_response"
   | "unknown";
 
+/** 每种错误的默认用户可见文案，未显式传 message 时使用。 */
 const publicMessages: Record<ModelGatewayErrorKind, string> = {
   timeout: "模型调用超时",
   cancelled: "模型调用已取消",
@@ -19,6 +26,7 @@ const publicMessages: Record<ModelGatewayErrorKind, string> = {
   unknown: "模型调用失败"
 };
 
+/** 模型网关统一错误：携带错误种类、是否可重试与 HTTP 状态码。 */
 export class ModelGatewayError extends Error {
   readonly kind: ModelGatewayErrorKind;
   readonly retryable: boolean;
@@ -40,6 +48,10 @@ export class ModelGatewayError extends Error {
   }
 }
 
+/**
+ * 把 HTTP 状态码归类为网关错误。
+ * 4xx 前段为认证失败、中段为请求无效（均不可重试）；408/504 超时、429 限流、5xx 不可用（均可重试）。
+ */
 export function createHttpModelGatewayError(status: number) {
   if (status === 401 || status === 403) {
     return new ModelGatewayError({ kind: "auth", retryable: false, status });
@@ -59,6 +71,7 @@ export function createHttpModelGatewayError(status: number) {
   return new ModelGatewayError({ kind: "unknown", retryable: false, status });
 }
 
+/** 模型返回了无法解析的响应：视为可重试（可能为瞬时损坏）。 */
 export function malformedModelResponse(cause?: unknown) {
   return new ModelGatewayError({
     kind: "malformed_response",
@@ -67,6 +80,11 @@ export function malformedModelResponse(cause?: unknown) {
   });
 }
 
+/**
+ * 把任意异常归一化为网关错误。
+ * 外部信号已中止时优先判定为取消；TimeoutError/AbortError 按名字识别（跨运行时通用），
+ * TypeError 通常意味着响应结构异常，视为暂时不可用。
+ */
 export function normalizeModelGatewayError(error: unknown, externalSignal?: AbortSignal) {
   if (error instanceof ModelGatewayError) return error;
   if (externalSignal?.aborted) {

@@ -1,5 +1,11 @@
+/**
+ * 统一下拉框组件（自绘面板）。
+ * 自定义面板是为避免原生 select 样式跨平台差异，并放大右侧点击区域；
+ * 支持点击外部 / Esc 关闭，disabled 时强制收起。
+ */
 import { useEffect, useId, useRef, useState } from "react";
 
+/** 下拉选项：description 作为选项下的辅助说明，disabled 表示不可选。 */
 export interface SelectOption {
   label: string;
   value: string;
@@ -27,12 +33,14 @@ export function SelectField({ value, options, placeholder = "请选择", disable
   const rootRef = useRef<HTMLDivElement | null>(null);
   const selectedOption = options.find((option) => option.value === value);
 
+  // 变为禁用时同步收起面板，避免禁用状态下残留打开的菜单。
   useEffect(() => {
     if (disabled) {
       setOpen(false);
     }
   }, [disabled]);
 
+  // 面板打开期间挂载全局事件：点击组件外部或按 Esc 即关闭，卸载时清理监听。
   useEffect(() => {
     if (!open) {
       return;
@@ -59,6 +67,7 @@ export function SelectField({ value, options, placeholder = "请选择", disable
     };
   }, [open]);
 
+  /** 选中选项：禁用项直接忽略，选中后立即关闭面板并把值交给父级。 */
   function chooseOption(option: SelectOption) {
     if (option.disabled) {
       return;

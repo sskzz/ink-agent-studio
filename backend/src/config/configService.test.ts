@@ -9,6 +9,8 @@ import { ConfigRepository } from "./configRepository.js";
 import { ConfigService } from "./configService.js";
 import { defaultAppConfig } from "./defaultAppConfig.js";
 
+// 公共配置服务单测：首次创建、乐观锁更新、损坏文件保护、默认配置与示例文件一致性。
+
 let tempRoot: string | null = null;
 
 afterEach(async () => {

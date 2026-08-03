@@ -1,3 +1,7 @@
+/**
+ * 设置页：读取生效配置并以表单方式编辑常规、运行队列、功能开关、记忆与模型上下文。
+ * 保存时携带 expectedRevision 做并发校验（409 冲突时提示重新读取）；支持重新读取回滚未保存改动。
+ */
 import type { AppConfig } from "@ink-agent/contracts";
 import { RefreshCw, Save } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -7,16 +11,19 @@ import { getSettings, reloadSettings, updateSettings } from "../api/settingsApi"
 
 type SettingsStatus = "idle" | "loading" | "saving";
 
+/** 设置页主组件：表单状态全部本地维护，保存/重读才与后端交互。 */
 export function SettingsPage() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [revision, setRevision] = useState(0);
   const [status, setStatus] = useState<SettingsStatus>("loading");
   const [message, setMessage] = useState("");
 
+  // 挂载时读取一次生效配置。
   useEffect(() => {
     void loadSettings();
   }, []);
 
+  /** 读取生效配置：成功后才允许编辑。 */
   async function loadSettings() {
     setStatus("loading");
     setMessage("");
@@ -32,6 +39,7 @@ export function SettingsPage() {
     }
   }
 
+  /** 保存配置：整份表单作为 changes 提交，并携带期望版本做并发校验。 */
   async function saveSettings() {
     if (!config) return;
     setStatus("saving");
@@ -67,6 +75,7 @@ export function SettingsPage() {
     }
   }
 
+  /** 重新读取：放弃表单未保存改动，恢复到磁盘上的持久化状态。 */
   async function refreshSettings() {
     setStatus("loading");
     setMessage("");
@@ -82,6 +91,7 @@ export function SettingsPage() {
     }
   }
 
+  // 配置尚未加载时只渲染标题与状态行，并提供失败重试入口。
   if (!config) {
     return (
       <div className="page">
@@ -251,6 +261,7 @@ export function SettingsPage() {
   );
 }
 
+/** 数字表单字段：min/max 由调用方限定，输入直接以 number 回调。 */
 function NumberField({
   label,
   value,
@@ -278,6 +289,7 @@ function NumberField({
   );
 }
 
+/** 开关表单字段：受控 checkbox，变化即回调父级。 */
 function ToggleField({ label, checked, onChange }: { label: string; checked: boolean; onChange(value: boolean): void }) {
   return (
     <label className="settings-toggle">
@@ -287,6 +299,7 @@ function ToggleField({ label, checked, onChange }: { label: string; checked: boo
   );
 }
 
+/** 错误归一：409 版本冲突给出专属提示，其余透传错误消息。 */
 function toErrorMessage(error: unknown) {
   if (error instanceof ApiError && error.status === 409) {
     return "配置已在其他位置更新，请重新读取后再保存。";

@@ -1,3 +1,7 @@
+/**
+ * 文件职责：工作区初始化与摘要：确保目录与索引文件存在，启动时执行存储迁移与技能安装。
+ * 边界：只做"确保存在"级别的初始化，不覆盖已有文件内容；路由重置仅供测试/修复使用。
+ */
 import { z } from "zod";
 import { ensureDirectory, pathExists, writeTextFileAtomic } from "../../utils/fileStore.js";
 import { readJsonFile, writeJsonFile } from "../../utils/jsonStore.js";
@@ -51,6 +55,7 @@ export async function ensureWorkspace(paths: WorkspacePaths) {
   await new SkillRepository(paths).ensureInstalled();
 }
 
+/** 工作区摘要：目录位置与各类数据量，供前端状态栏展示。 */
 export async function getWorkspaceSummary(paths: WorkspacePaths) {
   await ensureWorkspace(paths);
   const books = await readJsonFile(paths.booksIndexFile, emptyArraySchema, []);

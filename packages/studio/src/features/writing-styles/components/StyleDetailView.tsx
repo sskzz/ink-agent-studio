@@ -1,3 +1,7 @@
+/**
+ * 风格详情视图：风格总览、模板来源、多样本/版本管理与完整分析结果。
+ * 样本与版本数据由父页传入，添加/移除/重建/激活等操作回调父级执行。
+ */
 import { Badge } from "@/shared/components/ui/Badge";
 import type { WritingStyleSampleDto, WritingStyleVersionDto } from "../api/writingStylesApi";
 import type { StyleParameter, WritingStyle } from "../data/writingStyles";
@@ -15,6 +19,7 @@ interface StyleDetailViewProps {
   onCopyPrompt: (snippet: string) => void;
 }
 
+/** 风格详情视图主组件：纯展示 + 操作回调，不持有数据状态。 */
 export function StyleDetailView({
   style,
   samples,
@@ -147,6 +152,7 @@ export function StyleDetailView({
   );
 }
 
+/** 参数指标条：标签 + 展示值 + 说明，底部的 meter 宽度表示置信度。 */
 function InsightMeter({ parameter }: { parameter: StyleParameter }) {
   return (
     <article className="style-insight-item">

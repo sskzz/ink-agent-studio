@@ -1,10 +1,16 @@
+/**
+ * 总览页（首页）：展示产品定位，并把导航配置中的功能页渲染为入口卡片。
+ * 卡片数据完全来自 config/navigation.ts，新增功能页后首页入口自动出现。
+ */
 import { ArrowUpRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import { navigationItems } from "@/config/navigation";
 import { Badge } from "@/shared/components/ui/Badge";
 
+// 排除首页自身，其余导航项作为功能入口卡片展示。
 const featurePages = navigationItems.filter((item) => item.to !== "/");
 
+/** 总览页组件：纯静态展示，无业务交互。 */
 export function DashboardPage() {
   return (
     <div className="page">

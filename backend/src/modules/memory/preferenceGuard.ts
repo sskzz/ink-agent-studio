@@ -1,6 +1,12 @@
+/**
+ * 偏好内容守卫。
+ * 职责：拦截把「作品事实」伪装成长期偏好的提案（角色设定、世界观、剧情走向、能力物品等）；
+ * 边界：基于关键词启发式规则，只做准入拦截，不负责语义理解；被拦截的提案必须留在 BookState 管理。
+ */
 import type { UserPreferenceProposalInput } from "@ink-agent/contracts";
 import { badRequest } from "../../utils/errors.js";
 
+// 作品事实特征句式（中英文）：命中任一即判定为作品事实而非协作偏好
 const storyFactPatterns = [
   /(?:主角|男主|女主|反派|配角|角色|人物)(?:叫|名为|是|拥有|来自|最终|身份为|关系为)/,
   /(?:父亲|母亲|兄弟|姐妹|师父|恋人)(?:是|叫|名为)/,
@@ -11,7 +17,9 @@ const storyFactPatterns = [
   /(?:plot|ending|setting|timeline|foreshadowing)\s+(?:is|was|happens|reveals|points to)/i
 ];
 
-/** 偏好记忆只能描述用户如何协作/写作，不能把作品事实伪装成长期偏好。 */
+/** 偏好记忆只能描述用户如何协作/写作，不能把作品事实伪装成长期偏好。
+ * @throws badRequest 命中作品事实句式时抛出，错误信息带命中词与允许的偏好键列表
+ */
 export function assertPreferenceOnly(input: UserPreferenceProposalInput) {
   const content = `${input.value}\n${input.reason}`.toLocaleLowerCase();
   const matched = storyFactPatterns.filter((pattern) => pattern.test(content)).map((pattern) => pattern.source);

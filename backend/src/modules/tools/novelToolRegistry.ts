@@ -1,3 +1,8 @@
+/**
+ * 文件职责：小说域 Agent 工具的集中注册。
+ * 边界：只读工具直接读取作品状态；写相关能力只能通过 propose_state_patch 提交待审批 Patch，
+ * 工具本身没有直接写文件的权限。
+ */
 import { z } from "zod";
 import { getChapter, listChapters } from "../books/chapterService.js";
 import { getEntity } from "../books/entityService.js";
@@ -36,6 +41,7 @@ export function createNovelToolRegistry() {
           if (results.length >= (input.limit ?? 5)) break;
           const full = await getChapter(context.paths, context.bookId, chapter.id);
           if (!query || `${chapter.title}\n${full.content}`.toLocaleLowerCase().includes(query)) {
+            // 命中处前后各截 120/360 字作为上下文片段，控制返回体积
             const index = query ? full.content.toLocaleLowerCase().indexOf(query) : 0;
             const start = Math.max(0, index - 120);
             results.push({
@@ -61,6 +67,7 @@ export function createNovelToolRegistry() {
       inputSchema: stateInput,
       requiresApproval: false,
       async execute(context, input) {
+        // current_state 的文件 id 是 current-state，做一次别名映射
         const fileId = input.file === "current_state" ? "current-state" : input.file;
         const file = await getBookFileContent(context.paths, context.bookId, fileId);
         return { file: input.file, content: file.content, contentHash: file.contentHash };
@@ -72,6 +79,7 @@ export function createNovelToolRegistry() {
       inputSchema: draftInput,
       requiresApproval: false,
       async execute(_context, input) {
+        // 本地规则检查：不消耗模型调用，快速给出去 AI 味合规结果
         const policy = compileAntiAiPolicy({ sceneType: "mixed" });
         return evaluateAntiAiCompliance(input.draft, policy);
       }
@@ -82,6 +90,7 @@ export function createNovelToolRegistry() {
       inputSchema: patchInput,
       requiresApproval: false,
       async execute(context, input) {
+        // 写能力必须处于可追踪 Run 中，且只能生成待审批 Patch，绝不直接改文件
         if (!context.runId || !context.patchService) throw new Error("propose_state_patch 必须在可追踪 Run 中调用");
         return context.patchService.propose(context.runId, {
           bookId: context.bookId,

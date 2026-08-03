@@ -1,7 +1,13 @@
 import { z } from "zod";
 
+/**
+ * 实体（人物 / 阵营 / 地点 / 物品）相关 Zod schema。
+ */
+
+/** 实体类型枚举。 */
 export const entityTypeSchema = z.enum(["character", "faction", "location", "item"]);
 
+/** 实体记录结构，对应 books/{bookId}/entities/index.json 中的条目。 */
 export const bookEntityRecordSchema = z.object({
   id: z.string(),
   bookId: z.string(),
@@ -15,8 +21,10 @@ export const bookEntityRecordSchema = z.object({
   updatedAt: z.string()
 });
 
+/** 实体列表索引结构。 */
 export const bookEntitiesIndexSchema = z.array(bookEntityRecordSchema);
 
+/** 实体新建/更新入参：带 id 视为更新，否则新建；名称必填。 */
 export const entityUpsertInputSchema = z.object({
   id: z.string().optional(),
   entityType: entityTypeSchema,

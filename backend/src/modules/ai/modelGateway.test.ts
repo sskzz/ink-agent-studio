@@ -1,3 +1,4 @@
+// 测试文件：模型网关的弹性行为（重试、fallback、超时/取消分类、SSE 流式、审计与成本统计）。
 import { mkdtemp, rm } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";

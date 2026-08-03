@@ -1,7 +1,13 @@
+/**
+ * 审稿结果聚合器。
+ * 职责：把三路审查（本地风格度量、本地反 AI 规则、模型语义审查）合并为一份最终审稿结论，并生成重写指令；
+ * 边界：纯函数；语义审查降级（degraded）时不会让整体失败，只记录降级原因；合并分数按「多稳定样本」加权语义审查占比。
+ */
 import type { WritingStyleComplianceReport } from "../styles/writingStyleCompliance.js";
 import type { SemanticStyleReview } from "./semanticStyleReviewer.js";
 import type { AntiAiLocalReview } from "./antiAi/antiAiLocalReviewer.js";
 
+/** 合并后的审稿结论：passed 为最终闸门，hardFailures 是不容协商的硬违规。 */
 export interface CombinedStyleReview {
   passed: boolean;
   score: number | null;
@@ -13,6 +19,14 @@ export interface CombinedStyleReview {
   degradedReasons: string[];
 }
 
+/**
+ * 合并三路审查结论。
+ * @param input.local 本地风格度量结果（可能为 null：未绑定风格/无版本）
+ * @param input.antiAi 本地反 AI 规则结果
+ * @param input.semantic 模型语义审查结果（可能为 null：模型不可用）
+ * @param input.stableMultiSample 是否有 >=3 篇稳定样本（决定本地结论在总分中的权重）
+ * @param input.invariantRuleIds 风格不可变规则 id 集合（其违规视为硬违规）
+ */
 export function combineStyleReviews(input: {
   local: WritingStyleComplianceReport | null;
   antiAi?: AntiAiLocalReview | null;
@@ -21,6 +35,7 @@ export function combineStyleReviews(input: {
   stableMultiSample: boolean;
   invariantRuleIds?: string[];
 }): CombinedStyleReview {
+  // 硬违规：语义层的人称/距离/连续性违规与不可变规则违规、反 AI 层的 hard 违规；任一存在即 overall 失败
   const semanticHardFailures = (input.semantic?.violations ?? [])
     .filter((item) => item.severity === "high" && (["viewpoint", "distance", "continuity"].includes(item.category) || input.invariantRuleIds?.includes(item.ruleId)))
     .map((item) => `${item.category}：${item.reason}`);
@@ -32,6 +47,7 @@ export function combineStyleReviews(input: {
   const localScore = localScores.length ? localScores.reduce((sum, value) => sum + value, 0) / localScores.length : null;
   const semanticScore = input.semantic?.score;
   let score: number | null = null;
+  // 合并分数：两路都有分时加权平均——本地结论可信度随稳定样本数提升（0.25 → 0.4）
   if (localScore !== null && localScore !== undefined && semanticScore !== null && semanticScore !== undefined) {
     const localWeight = input.stableMultiSample ? 0.4 : 0.25;
     score = Math.round(localScore * localWeight + semanticScore * (1 - localWeight));
@@ -50,6 +66,7 @@ export function combineStyleReviews(input: {
   };
 }
 
+/** 把三路违规合成给模型/用户的分步重写指令；hardFailures 最先列出，low 级违规一律过滤。 */
 export function buildCombinedRevisionInstruction(review: CombinedStyleReview) {
   const local = review.localReview?.violations
     .filter((item) => item.severity !== "low")

@@ -1,3 +1,10 @@
+/**
+ * 统一 HTTP 请求层：封装 fetch 与后端响应拆包。
+ * 所有业务 API 都基于这里的 apiGet/apiPost 等方法，集中处理错误归一、JSON 序列化与
+ * 后端 { code, message, data } envelope 约定，页面层不感知传输细节。
+ */
+
+/** 业务请求失败时抛出的统一错误类型：携带 HTTP 状态码与后端业务 code。 */
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -9,6 +16,7 @@ export class ApiError extends Error {
   }
 }
 
+/** 后端统一响应结构：code 为 0 表示成功，非 0 视为业务错误。 */
 interface ApiEnvelope<T> {
   code: number;
   message: string;
@@ -28,6 +36,7 @@ const viteEnv = (import.meta as ImportMeta & { env?: { VITE_API_BASE_URL?: strin
 export const API_BASE_URL =
   viteEnv?.VITE_API_BASE_URL?.replace(/\/$/, "") ?? DEFAULT_API_BASE_URL;
 
+/** 拼接请求地址：绝对 URL 直接使用，相对路径统一挂在 API_BASE_URL 下并去除多余斜杠。 */
 function createUrl(path: string) {
   if (/^https?:\/\//i.test(path)) {
     return path;
@@ -36,6 +45,7 @@ function createUrl(path: string) {
   return `${API_BASE_URL}/${path.replace(/^\//, "")}`;
 }
 
+/** 解析响应：HTTP 非 2xx 与业务 code 非 0 都归一为 ApiError，成功时返回拆包后的 data。 */
 async function parseResponse<T>(response: Response, path: string): Promise<T> {
   const contentType = response.headers.get("content-type") ?? "";
   const payload = contentType.includes("application/json") ? await response.json() : null;
@@ -64,6 +74,7 @@ async function parseResponse<T>(response: Response, path: string): Promise<T> {
   return payload as T;
 }
 
+/** 统一发起请求：有 body 时自动设置 JSON 头，其余情况交给各方法控制 method。 */
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(createUrl(path), {
     ...init,
@@ -77,12 +88,14 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   return parseResponse<T>(response, path);
 }
 
+/** GET 请求：只读接口使用。 */
 export async function apiGet<T>(path: string): Promise<T> {
   return apiRequest<T>(path, {
     method: "GET"
   });
 }
 
+/** POST 请求：创建资源或触发动作；body 缺省时不携带请求体。 */
 export async function apiPost<T>(path: string, body?: JsonBody): Promise<T> {
   return apiRequest<T>(path, {
     method: "POST",
@@ -90,6 +103,7 @@ export async function apiPost<T>(path: string, body?: JsonBody): Promise<T> {
   });
 }
 
+/** PATCH 请求：局部更新资源。 */
 export async function apiPatch<T>(path: string, body?: JsonBody): Promise<T> {
   return apiRequest<T>(path, {
     method: "PATCH",
@@ -97,6 +111,7 @@ export async function apiPatch<T>(path: string, body?: JsonBody): Promise<T> {
   });
 }
 
+/** PUT 请求：整体替换资源。 */
 export async function apiPut<T>(path: string, body?: JsonBody): Promise<T> {
   return apiRequest<T>(path, {
     method: "PUT",
@@ -104,6 +119,7 @@ export async function apiPut<T>(path: string, body?: JsonBody): Promise<T> {
   });
 }
 
+/** DELETE 请求：删除资源。 */
 export async function apiDelete<T>(path: string): Promise<T> {
   return apiRequest<T>(path, {
     method: "DELETE"

@@ -18,6 +18,15 @@ import { createWorkspacePaths, type WorkspacePaths } from "../modules/workspace/
 import { RuntimeDatabase } from "./database/runtimeDatabase.js";
 import { WorkspaceLease } from "./workspaceLease.js";
 
+/**
+ * 应用服务装配。
+ * 把仓储、协调器、技能/会话/偏好等服务按依赖关系组合成单一对象，
+ * 路由层只依赖 ApplicationServices，不关心具体实例如何创建。
+ */
+
+/**
+ * 全后端共享的服务集合：路由处理器与启动逻辑统一从它取依赖。
+ */
 export interface ApplicationServices {
   paths: WorkspacePaths;
   configService: ConfigService;
@@ -34,6 +43,10 @@ export interface ApplicationServices {
   workspaceLease: WorkspaceLease;
 }
 
+/**
+ * 组装默认应用服务。
+ * 数据库、配置、事件存储等依赖顺序固定；测试可通过传入自定义 paths 获得隔离实例。
+ */
 export function createApplicationServices(paths = createWorkspacePaths()): ApplicationServices {
   const runtimeDatabase = new RuntimeDatabase(paths);
   const runEventHub = new RunEventHub();

@@ -44,6 +44,7 @@ interface ActiveRun extends QueuedRun {
 export class RunCoordinator {
   private readonly queue: QueuedRun[] = [];
   private readonly active = new Map<string, ActiveRun>();
+  private readonly pausedRuns = new Set<string>();
   private pumpScheduled = false;
   private shuttingDown = false;
 
@@ -147,6 +148,30 @@ export class RunCoordinator {
     }
 
     this.active.get(runId)?.controller.abort(new Error("用户取消运行"));
+    return this.eventStore.getRun(runId);
+  }
+
+  /**
+   * 暂停运行：中止正在进行的模型调用，并把 Run 标记为可恢复的 interrupted，
+   * 后续可通过 resume/resumeSystem 从最近检查点继续执行。
+   */
+  pause(runId: string) {
+    const snapshot = this.eventStore.getRun(runId);
+    if (["cancelled", "completed", "failed", "interrupted", "cancelling"].includes(snapshot.status)) {
+      return snapshot;
+    }
+
+    const queueIndex = this.queue.findIndex((item) => item.runId === runId);
+    if (queueIndex >= 0) {
+      this.queue.splice(queueIndex, 1);
+      return this.eventStore.appendEvent(runId, {
+        type: "run_interrupted",
+        payload: { reason: "用户暂停执行（任务尚未开始）", recoverable: true, paused: true }
+      }).snapshot;
+    }
+
+    this.pausedRuns.add(runId);
+    this.active.get(runId)?.controller.abort(new Error("用户暂停执行"));
     return this.eventStore.getRun(runId);
   }
 
@@ -271,6 +296,7 @@ export class RunCoordinator {
   private async execute(active: ActiveRun) {
     let currentStage: string | null = null;
     let committed = false;
+    this.pausedRuns.delete(active.runId);
     const completeCurrentStage = () => {
       if (!currentStage) return;
       this.eventStore.appendEvent(active.runId, { type: "stage_completed", stage: currentStage, payload: {} });
@@ -335,6 +361,12 @@ export class RunCoordinator {
         this.eventStore.appendEvent(active.runId, {
           type: "run_interrupted",
           payload: { reason: "后端关闭中断运行", recoverable: true }
+        });
+      } else if (this.pausedRuns.has(active.runId)) {
+        this.pausedRuns.delete(active.runId);
+        this.eventStore.appendEvent(active.runId, {
+          type: "run_interrupted",
+          payload: { reason: "用户暂停执行，可从检查点继续", recoverable: true, paused: true }
         });
       } else if (active.controller.signal.aborted) {
         this.eventStore.appendEvent(active.runId, {

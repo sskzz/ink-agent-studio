@@ -1,6 +1,11 @@
+/**
+ * 编辑器中央内容面板：按导航项的 kind 渲染不同形态（空态 / 字段详情 / 章节写作区 /
+ * 草稿 / 角色管理 / 新建实体表单）。目前为页面结构占位，接口接入后替换对应区块。
+ */
 import { Archive, CircleDotDashed, Plus } from "lucide-react";
 import type { EditorNavItem } from "../types";
 
+/** 中央面板主组件：纯展示型，交互仅限章节文本域与模拟表单。 */
 export function EditorMainPanel({ item }: { item: EditorNavItem }) {
   return (
     <article className="novel-editor-card">
@@ -29,6 +34,7 @@ export function EditorMainPanel({ item }: { item: EditorNavItem }) {
   );
 }
 
+/** 角色管理面板：主要/次要角色分组 + 添加入口（当前为模拟结构）。 */
 function RoleManagerPanel() {
   return (
     <div className="novel-role-manager">
@@ -42,6 +48,7 @@ function RoleManagerPanel() {
   );
 }
 
+/** 新建实体（势力/地点/物品）表单：字段文案由导航项配置驱动，暂未持久化。 */
 function CreateEntityPanel({ item }: { item: EditorNavItem }) {
   return (
     <form className="novel-create-entity-form" onSubmit={(event) => event.preventDefault()}>

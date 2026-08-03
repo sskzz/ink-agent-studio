@@ -129,6 +129,60 @@ describe("RunCoordinator", () => {
     expect(eventStore.listEvents(run.id).map((event) => event.type)).toContain("cancel_requested");
   });
 
+  it("pauses an active run, aborts its model call and can resume from checkpoint", async () => {
+    let invocation = 0;
+    const initializationHandler: RunCommandHandler = ({ signal }) => {
+      invocation += 1;
+      if (invocation > 1) return Promise.resolve({ resumed: true });
+      return new Promise((_, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    };
+    const { coordinator, eventStore } = await createCoordinator(
+      async () => ({ unused: true }),
+      {},
+      { initialize_book: initializationHandler }
+    );
+    const run = await coordinator.enqueueSystem(initializationCommand());
+    await waitUntil(() => eventStore.getRun(run.id).status === "running");
+
+    coordinator.pause(run.id);
+    await coordinator.waitForIdle();
+
+    const pausedRun = eventStore.getRun(run.id);
+    expect(pausedRun.status).toBe("interrupted");
+    const interruptEvent = eventStore.listEvents(run.id).find((event) => event.type === "run_interrupted");
+    expect(interruptEvent?.payload).toMatchObject({ recoverable: true, paused: true });
+
+    await coordinator.resumeSystem(run.id);
+    await coordinator.waitForIdle();
+
+    expect(eventStore.getRun(run.id)).toMatchObject({ status: "completed", output: { resumed: true } });
+    expect(invocation).toBe(2);
+  });
+
+  it("pauses a queued run before it starts", async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const handler: RunCommandHandler = async ({ command }) => {
+      if (command.type === "continue_chapter" && command.chapterId === "chapter-1") await firstGate;
+      return { done: true };
+    };
+    const { coordinator, eventStore } = await createCoordinator(handler, { globalConcurrency: 1 });
+    const first = await coordinator.enqueue(command("book-1", "chapter-1"));
+    const second = await coordinator.enqueue(command("book-1", "chapter-2"));
+    await waitUntil(() => eventStore.getRun(first.id).status === "running");
+
+    coordinator.pause(second.id);
+
+    expect(eventStore.getRun(second.id).status).toBe("interrupted");
+    expect(eventStore.listEvents(second.id).map((event) => event.type)).toContain("run_interrupted");
+    releaseFirst();
+    await coordinator.waitForIdle();
+  });
+
   it("marks lost work interrupted and can resume the persisted command", async () => {
     const { coordinator, eventStore } = await createCoordinator(async () => ({ resumed: true }));
     const run = eventStore.createRun({ command: command(), configRevision: 1, configHash: "old-config" });

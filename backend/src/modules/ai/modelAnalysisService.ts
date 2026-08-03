@@ -1,3 +1,7 @@
+/**
+ * 文件职责：模型体系健康度分析。读取本地模型配置与路由，输出评分、状态、问题与建议。
+ * 边界：纯本地确定性检查，不请求模型、不读取 API Key；结果仅供前端展示与引导配置。
+ */
 import type { ModelConfigRecord, ModelRouteRecord } from "../../types/domain.js";
 import type { WorkspacePaths } from "../workspace/workspacePaths.js";
 import { getModelRoutes, listModelConfigs } from "../models/modelConfigRepository.js";
@@ -7,6 +11,7 @@ type AnalysisSeverity = "info" | "warning" | "critical";
 type AnalysisStatus = "ready" | "partial" | "blocked";
 type RouteKey = keyof ModelRouteRecord;
 
+/** 单条分析问题：severity 决定是否阻塞、是否告警；targetType 区分问题归属（配置/路由/系统）。 */
 interface AnalysisIssue {
   id: string;
   severity: AnalysisSeverity;
@@ -16,6 +21,7 @@ interface AnalysisIssue {
   targetType: "config" | "route" | "system";
 }
 
+/** 单个路由的分析结果：ready 表示该路由可正常使用，issues 为不满足原因。 */
 interface RouteAnalysis {
   routeKey: RouteKey;
   label: string;
@@ -26,12 +32,17 @@ interface RouteAnalysis {
   issues: string[];
 }
 
+/** 路由键到展示名的映射，同时作为路由遍历顺序的来源。 */
 const routeLabels: Record<RouteKey, string> = {
   writingModelId: "写作模型",
   reviewModelId: "审稿模型",
   planningModelId: "规划模型"
 };
 
+/**
+ * 构造 AnalysisIssue。
+ * id 由 targetType + targetId + title 组成，保证相同问题幂等可去重。
+ */
 function createIssue(
   severity: AnalysisSeverity,
   title: string,
@@ -49,6 +60,7 @@ function createIssue(
   };
 }
 
+/** 按字段聚合配置数量（enabled/total），用于服务商与用途分布统计。 */
 function countBy<T extends string>(configs: ModelConfigRecord[], field: (config: ModelConfigRecord) => T) {
   const stats = new Map<T, { enabled: number; total: number }>();
 
@@ -71,6 +83,7 @@ function isBlank(value: string) {
   return value.trim().length === 0;
 }
 
+/** 检查单个模型配置：停用、必填字段缺失、无连接测试适配器等。 */
 function analyzeConfig(config: ModelConfigRecord): AnalysisIssue[] {
   const issues: AnalysisIssue[] = [];
 
@@ -107,6 +120,7 @@ function analyzeConfig(config: ModelConfigRecord): AnalysisIssue[] {
   return issues;
 }
 
+/** 检查单个路由：未指定模型、指向的配置不存在或已停用。 */
 function analyzeRoute(routeKey: RouteKey, routes: ModelRouteRecord, configs: ModelConfigRecord[]): RouteAnalysis {
   const modelConfigId = routes[routeKey];
   const config = modelConfigId ? configs.find((item) => item.id === modelConfigId) : null;
@@ -133,6 +147,10 @@ function analyzeRoute(routeKey: RouteKey, routes: ModelRouteRecord, configs: Mod
   };
 }
 
+/**
+ * 计算健康分：路由缺失（规划 8 分、其他 16 分）与问题严重度（critical 22、warning 8、info 2）扣分，
+ * 结果收敛到 0-100，配置为空时由调用方直接给 0 分。
+ */
 function scoreIssues(issues: AnalysisIssue[], routes: RouteAnalysis[]) {
   const routePenalty = routes.reduce((sum, route) => sum + (route.ready ? 0 : route.routeKey === "planningModelId" ? 8 : 16), 0);
   const issuePenalty = issues.reduce((sum, issue) => {
@@ -150,6 +168,7 @@ function scoreIssues(issues: AnalysisIssue[], routes: RouteAnalysis[]) {
   return Math.max(0, Math.min(100, 100 - routePenalty - issuePenalty));
 }
 
+/** 由分数与问题严重度推导整体状态：有 critical 或低分则 blocked，有 warning 或中等分则 partial，否则 ready。 */
 function toStatus(score: number, issues: AnalysisIssue[]): AnalysisStatus {
   if (issues.some((issue) => issue.severity === "critical") || score < 55) {
     return "blocked";
@@ -162,6 +181,7 @@ function toStatus(score: number, issues: AnalysisIssue[]): AnalysisStatus {
   return "ready";
 }
 
+/** 汇总可执行的引导建议，用 Set 去重后输出。 */
 function createSuggestions(configs: ModelConfigRecord[], routes: RouteAnalysis[], issues: AnalysisIssue[]) {
   const suggestions = new Set<string>();
 
@@ -212,6 +232,7 @@ export async function analyzeModelSetup(paths: WorkspacePaths) {
   );
   const routeIssues = routeAnalysis.flatMap((route) =>
     route.issues.map((issue) =>
+      // 规划路由缺失只警告（可用启发式降级），写作/审稿路由缺失则视为 critical 阻塞
       createIssue(route.routeKey === "planningModelId" ? "warning" : "critical", route.label, issue, "route", route.modelConfigId)
     )
   );

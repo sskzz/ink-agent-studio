@@ -1,3 +1,4 @@
+// 测试：writingStyleConstraintCompiler V1 的编译与回退行为。
 import { describe, expect, it } from "vitest";
 import { compileWritingStyleConstraints } from "./writingStyleConstraintCompiler.js";
 

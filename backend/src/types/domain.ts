@@ -1,7 +1,15 @@
+/**
+ * 领域核心类型定义。
+ * 与 schemas 目录的 Zod schema 一一对应，这里只声明类型，不含运行时校验。
+ */
+
+/** 作品生命周期状态。 */
 export type BookStatus = "planning" | "drafting" | "reviewing" | "paused";
 
+/** 实体（设定条目）类型。 */
 export type EntityType = "character" | "faction" | "location" | "item";
 
+/** 作品文件类型，决定文件在 books/{bookId}/files 下的存盘位置与用途。 */
 export type BookFileType =
   | "brief"
   | "outline"
@@ -12,6 +20,7 @@ export type BookFileType =
   | "entity"
   | "import";
 
+/** 模型供应商标识，决定适配器选择。 */
 export type ModelProvider =
   | "openai"
   | "azure-openai"
@@ -38,8 +47,10 @@ export type ModelProvider =
   | "litellm"
   | "custom";
 
+/** 模型用途，用于模型路由选择（写作 / 审稿 / 规划等）。 */
 export type ModelPurpose = "planning" | "writing" | "review" | "embedding" | "image";
 
+/** Agent 运行状态机。 */
 export type AgentRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
 /**
@@ -68,6 +79,9 @@ export interface BookRecord {
   updatedAt: string;
 }
 
+/**
+ * 作品文件记录（book.json 之外的单个文件条目），保存在 books/{bookId}/index.json。
+ */
 export interface BookFileRecord {
   id: string;
   bookId: string;
@@ -81,6 +95,7 @@ export interface BookFileRecord {
   updatedAt: string;
 }
 
+/** 作品实体条目，保存在 books/{bookId}/entities/index.json。 */
 export interface BookEntityRecord {
   id: string;
   bookId: string;
@@ -94,6 +109,7 @@ export interface BookEntityRecord {
   updatedAt: string;
 }
 
+/** 章节记录，保存在 books/{bookId}/chapters/index.json。 */
 export interface ChapterRecord {
   id: string;
   bookId: string;
@@ -109,6 +125,7 @@ export interface ChapterRecord {
   updatedAt: string;
 }
 
+/** 模型配置记录，保存在 config/model-configs.json；apiKey 不落盘在此。 */
 export interface ModelConfigRecord {
   id: string;
   name: string;
@@ -124,12 +141,14 @@ export interface ModelConfigRecord {
   updatedAt: string;
 }
 
+/** 模型路由映射：写作 / 审稿 / 规划各绑定一个模型配置 id。 */
 export interface ModelRouteRecord {
   writingModelId: string | null;
   reviewModelId: string | null;
   planningModelId: string | null;
 }
 
+/** Agent 运行记录（JSONL 追加日志中的一行），可回放事件流。 */
 export interface AgentRunRecord {
   id: string;
   bookId: string | null;

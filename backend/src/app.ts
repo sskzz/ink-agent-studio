@@ -20,8 +20,13 @@ import { createSessionsRoute } from "./routes/sessions.js";
 import { createSkillsRoute } from "./routes/skills.js";
 import { createMemoryRoute } from "./routes/memory.js";
 
+/**
+ * Hono 应用装配。
+ * 负责框架级能力（CORS、统一错误处理、路由注册、404 兜底），业务逻辑全部委托给 modules 中的服务。
+ */
 const localOriginPattern = /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/;
 
+/** 从环境变量读取额外允许的来源列表（逗号分隔）。 */
 function getExtraAllowedOrigins() {
   return (process.env.INK_AGENT_ALLOWED_ORIGINS ?? "")
     .split(",")
@@ -29,6 +34,10 @@ function getExtraAllowedOrigins() {
     .filter(Boolean);
 }
 
+/**
+ * 解析 CORS 允许来源。
+ * 非本机来源必须在 INK_AGENT_ALLOWED_ORIGINS 白名单中；两者都不满足则返回 undefined（CORS 拒绝）。
+ */
 function resolveCorsOrigin(origin: string) {
   if (!origin) {
     return undefined;
@@ -49,6 +58,7 @@ function resolveCorsOrigin(origin: string) {
 export function createApp(services: ApplicationServices = createApplicationServices()) {
   const app = new Hono();
 
+  // 全局限定来源的 CORS：只放行本机来源与白名单来源，防止任意站点跨域调用本地后端。
   app.use(
     "*",
     cors({
@@ -78,6 +88,7 @@ export function createApp(services: ApplicationServices = createApplicationServi
 
   app.notFound((context) => jsonError(context, 14040, "接口不存在", 404));
 
+  // 全局错误兜底：未知异常统一收敛成 AppError 再输出，保证响应结构一致且不泄露内部堆栈。
   app.onError((error, context) => {
     const appError = toAppError(error);
     return jsonError(context, appError.code, appError.message, appError.status, appError.details);

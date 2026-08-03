@@ -1,3 +1,4 @@
+// 测试：会话与消息的增查、搜索与归档。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

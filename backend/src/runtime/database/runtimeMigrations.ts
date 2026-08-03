@@ -1,11 +1,24 @@
 import type { DatabaseSync } from "node:sqlite";
 
+/**
+ * 运行数据库版本化迁移。
+ * 迁移按 version 升序定义，每个迁移在独立事务中执行并登记到 schema_migrations；
+ * 只允许向前升级，发现比程序支持的版本更新会直接报错拒绝启动。
+ */
+
+/** 单个迁移定义：version 必须单调递增，name 唯一，sql 在事务内执行。 */
 export interface RuntimeMigration {
   version: number;
   name: string;
   sql: string;
 }
 
+/**
+ * 全部迁移清单（v1-v8）。
+ * 说明：runs/run_events/run_artifacts/run_checkpoints/model_attempts 为可重放的运行数据；
+ * state_patches 为状态补丁日志；sessions/session_messages(含 FTS) 为会话与消息检索；
+ * user_preferences 为偏好记忆，并配套生命周期触发器保证状态机不越界。
+ */
 export const runtimeMigrations: RuntimeMigration[] = [
   {
     version: 1,
@@ -379,6 +392,10 @@ export const runtimeMigrations: RuntimeMigration[] = [
   }
 ];
 
+/**
+ * 读取已登记的迁移版本列表。
+ * schema_migrations 表不存在时视为全新库，返回空数组。
+ */
 export function readAppliedMigrationVersions(database: DatabaseSync) {
   const table = database.prepare(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
@@ -390,6 +407,12 @@ export function readAppliedMigrationVersions(database: DatabaseSync) {
     .map((row) => Number(row.version));
 }
 
+/**
+ * 应用所有未执行的迁移。
+ * 先检查库版本不高于程序支持版本（防止旧程序降级打开新库），
+ * 然后逐个迁移：每个迁移一个事务，SQL 失败自动回滚该版本，已登记版本跳过。
+ * 返回本次新应用的迁移列表。
+ */
 export function applyRuntimeMigrations(database: DatabaseSync) {
   database.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -401,6 +424,7 @@ export function applyRuntimeMigrations(database: DatabaseSync) {
 
   const applied = new Set(readAppliedMigrationVersions(database));
   const latestVersion = runtimeMigrations.at(-1)?.version ?? 0;
+  // 数据库版本超前说明被新版程序打开过：拒绝继续写，避免数据被旧逻辑破坏。
   const unknownVersion = [...applied].find((version) => version > latestVersion);
   if (unknownVersion !== undefined) {
     throw new Error(`运行数据库版本 ${unknownVersion} 高于当前程序支持的版本 ${latestVersion}`);

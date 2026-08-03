@@ -1,3 +1,4 @@
+// 测试文件：约束冲突消解（事实约束优先于风格偏好）。
 import { describe, expect, it } from "vitest";
 import { resolveGenerationConstraints } from "./constraintResolver.js";
 

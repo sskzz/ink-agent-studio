@@ -1,3 +1,4 @@
+// 测试：writingStyleCompliance 符合度评估与重写指令构建。
 import { describe, expect, it } from "vitest";
 import { createWritingStyleFeatureProfile, extractWritingStyleFeatures } from "./writingStyleFeatures.js";
 import { buildStyleRevisionInstruction, evaluateWritingStyleCompliance } from "./writingStyleCompliance.js";

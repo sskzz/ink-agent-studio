@@ -1,29 +1,38 @@
+/**
+ * 模型体系分析面板：健康分、汇总指标、三条调用链路体检与风险/建议清单。
+ * 纯展示组件，分析数据由 store 传入；后端不读取密钥、不真实调用模型。
+ */
 import { providerOptions } from "@/config/modelOptions";
 import { Badge } from "@/shared/components/ui/Badge";
 import type { ModelAnalysis } from "@/shared/types/domain";
 
+/** 分析总状态 → 中文标签。 */
 const analysisStatusLabel: Record<ModelAnalysis["status"], string> = {
   ready: "可运行",
   partial: "需优化",
   blocked: "未就绪"
 };
 
+/** 分析总状态 → 徽章配色。 */
 const analysisStatusTone: Record<ModelAnalysis["status"], "sage" | "amber" | "rose"> = {
   ready: "sage",
   partial: "amber",
   blocked: "rose"
 };
 
+/** 问题严重级别 → 徽章配色。 */
 const issueTone: Record<ModelAnalysis["issues"][number]["severity"], "sage" | "amber" | "rose" | "blue"> = {
   info: "blue",
   warning: "amber",
   critical: "rose"
 };
 
+/** 服务商 key → 展示名；未匹配时回显原 key。 */
 function providerLabel(provider: string) {
   return providerOptions.find((option) => option.value === provider)?.label ?? provider;
 }
 
+/** 模型体系分析面板：风险与建议各截取前 4 条展示，避免面板过长。 */
 export function ModelAnalysisPanel({ analysis, loading }: { analysis: ModelAnalysis | null; loading: boolean }) {
   const visibleIssues = analysis?.issues.slice(0, 4) ?? [];
   const visibleSuggestions = analysis?.suggestions.slice(0, 4) ?? [];

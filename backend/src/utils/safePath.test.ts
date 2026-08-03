@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { resolveInsideRoot } from "./safePath.js";
 
+// 路径穿越防护单测：验证工作区内部路径可解析、外部路径被拒绝。
+
 describe("resolveInsideRoot", () => {
   it("允许解析工作区内部路径", () => {
     const result = resolveInsideRoot("D:/workspace", "books", "demo", "book.json");

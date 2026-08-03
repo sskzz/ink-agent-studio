@@ -1,3 +1,4 @@
+// 后端路由冒烟测试：覆盖 CORS、作品/文件/实体/章节、AI 初始化、写作风格、模型分析等主链路。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

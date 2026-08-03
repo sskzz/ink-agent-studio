@@ -1,3 +1,4 @@
+// 测试：Patch 提议/应用/冲突检测与状态流转。
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

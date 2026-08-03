@@ -1,3 +1,4 @@
+// 测试：writingStyleAggregator 样本聚合与离群检测。
 import { describe, expect, it } from "vitest";
 import { aggregateWritingStyleSamples } from "./writingStyleAggregator.js";
 

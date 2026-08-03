@@ -1,3 +1,8 @@
+/**
+ * 会话仓储。
+ * 职责：会话与消息的 SQLite 持久化——创建（父会话引用校验）、追加消息（归档会话禁止）、消息列表、全文搜索（FTS5 优先，异常/LIKE 回退）；
+ * 边界：只做存取与引用完整性校验，不包含业务语义；追加消息时自动维护会话标题（首条用户消息）与 last_message_at。
+ */
 import { randomUUID } from "node:crypto";
 import {
   sessionMessageCreateInputSchema,
@@ -17,6 +22,7 @@ import { estimateTokens } from "../prompts/promptAssembler.js";
 export class SessionRepository {
   constructor(private readonly runtimeDatabase: RuntimeDatabase) {}
 
+  /** 创建会话：可选挂载父会话（必须真实存在），否则抛 notFound。 */
   create(input: { bookId: string | null; title: string; parentSessionId: string | null }) {
     const id = randomUUID();
     const now = new Date().toISOString();
@@ -45,12 +51,14 @@ export class SessionRepository {
     return session;
   }
 
+  /** 按 id 读取会话；不存在时抛 notFound。 */
   get(sessionId: string) {
     const row = readSessionRow(this.runtimeDatabase.database, sessionId);
     if (!row) throw notFound("Session 不存在", { sessionId });
     return mapSessionRow(row);
   }
 
+  /** 列出会话：按作品过滤（可选），按更新时间倒序取 limit 条。 */
   list(options: { bookId?: string; limit: number }) {
     if (options.bookId) {
       return this.runtimeDatabase.database.prepare(
@@ -62,6 +70,7 @@ export class SessionRepository {
     ).all(options.limit).map(mapSessionRow);
   }
 
+  /** 归档会话（active → archived）；幂等：已归档直接返回。 */
   archive(sessionId: string) {
     const current = this.get(sessionId);
     if (current.status === "archived") return current;
@@ -72,6 +81,10 @@ export class SessionRepository {
     return this.get(sessionId);
   }
 
+  /**
+   * 追加消息：校验会话存在且未归档、父消息归属当前会话，然后插入消息并刷新会话元数据。
+   * 会话无标题时用首条用户消息自动生成标题（取前 60 字）。
+   */
   addMessage(sessionId: string, rawInput: unknown) {
     const input = sessionMessageCreateInputSchema.parse(rawInput);
     const id = randomUUID();
@@ -130,6 +143,7 @@ export class SessionRepository {
     });
   }
 
+  /** 列出会话消息：子查询取最新 limit 条（created_at,rowid 倒序），再按时间正序返回，保证聊天顺序稳定。 */
   listMessages(sessionId: string, limit: number) {
     this.get(sessionId);
     return this.runtimeDatabase.database.prepare(`
@@ -140,10 +154,12 @@ export class SessionRepository {
     `).all(sessionId, limit).map(mapMessageRow);
   }
 
+  /** 搜索消息：查询词 >=3 字走 FTS5 全文检索（BM25 排序 + snippet），否则走 LIKE 模糊匹配。 */
   search(input: SessionSearchInput & { limit: number }): SessionSearchResult[] {
     return input.query.length >= 3 ? this.searchFts(input) : this.searchLike(input);
   }
 
+  /** FTS 检索：MATCH 语法异常（非法查询词等）时降级为 LIKE，保证搜索不因语法问题中断。 */
   private searchFts(input: SessionSearchInput & { limit: number }) {
     try {
       const rows = this.runtimeDatabase.database.prepare(`
@@ -174,6 +190,7 @@ export class SessionRepository {
     }
   }
 
+  /** LIKE 回退：转义 %/_/\\ 后做包含匹配，无相关性排序，rank 为 null。 */
   private searchLike(input: SessionSearchInput & { limit: number }) {
     const escaped = input.query.replace(/[\\%_]/g, "\\$&");
     const rows = this.runtimeDatabase.database.prepare(`
@@ -199,6 +216,7 @@ function readSessionRow(database: DatabaseSync, sessionId: string) {
   return database.prepare("SELECT * FROM sessions WHERE id = ?").get(sessionId);
 }
 
+/** 行 → 实体映射：snake_case 转 camelCase 并按 schema 校验。 */
 function mapSessionRow(row: Record<string, unknown>) {
   return sessionSchema.parse({
     schemaVersion: row.schema_version,
@@ -213,6 +231,7 @@ function mapSessionRow(row: Record<string, unknown>) {
   });
 }
 
+/** 行 → 消息实体映射；metadata 以 JSON 字符串存储，读取时解析。 */
 function mapMessageRow(row: Record<string, unknown>) {
   return sessionMessageSchema.parse({
     schemaVersion: row.schema_version,
@@ -229,10 +248,12 @@ function mapMessageRow(row: Record<string, unknown>) {
   });
 }
 
+/** FTS 查询词加引号包裹并转义内部引号，把用户输入当作字面短语而非语法。 */
 function quoteFts(query: string) {
   return `"${query.replace(/"/g, '""')}"`;
 }
 
+/** 会话标题生成：压缩空白后取前 60 字。 */
 function createTitle(content: string) {
   const compact = content.replace(/\s+/g, " ").trim();
   return Array.from(compact).slice(0, 60).join("");

@@ -1,3 +1,8 @@
+/**
+ * 模型配置页：类型入口 → 模型列表 / 用途分配 → 详情表单的层级视图。
+ * 数据与操作全部走 useModelConfigStore，页面不直接调 API；
+ * 详情表单支持模型发现、成本估算与连通性测试。
+ */
 import { useEffect, useState } from "react";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import { discoverAvailableModels } from "@/shared/api/modelConfigApi";
@@ -11,16 +16,7 @@ import type { ModelConfig, ModelProvider, ModelPurpose } from "@/shared/types/do
 
 type ModelView = "types" | "list" | "detail" | "planning" | "writing" | "review";
 
-/**
- * 模型配置页。
- *
- * 页面结构按“模型类型入口 -> 模型列表/用途分配 -> 模型详情”组织：
- * - 模型列表：管理所有可调用模型。
- * - 写作模型：从模型列表中选择 Agent 写正文时使用的模型。
- * - 审稿模型：从模型列表中选择审稿/修订时使用的模型。
- *
- * 当前已通过 modelConfigApi.ts 接入本地 Hono 后端，页面和 store 不直接关心 fetch 细节。
- */
+/** 模型配置页主组件：负责视图切换与 store 动作的绑定。 */
 export function ModelsPage() {
   const [view, setView] = useState<ModelView>("types");
 
@@ -45,6 +41,7 @@ export function ModelsPage() {
     testDraft
   } = useModelConfigStore();
 
+  // 页面挂载时加载一次配置快照（列表 + 用途分配 + 分析）。
   useEffect(() => {
     void loadConfigs();
   }, [loadConfigs]);
@@ -55,16 +52,19 @@ export function ModelsPage() {
   const reviewConfig = configs.find((config) => config.id === usage.reviewModelId);
   const planningConfig = configs.find((config) => config.id === usage.planningModelId);
 
+  /** 新建入口：重置草稿后直接进入详情表单。 */
   function openCreateForm() {
     createConfig();
     setView("detail");
   }
 
+  /** 打开详情：把选中配置同步为草稿。 */
   function openDetail(config: ModelConfig) {
     selectConfig(config);
     setView("detail");
   }
 
+  /** 返回类型入口视图。 */
   function backToTypes() {
     setView("types");
   }
@@ -195,6 +195,7 @@ interface ModelTypeLandingProps {
   onOpenPlanning: () => void;
 }
 
+/** 类型入口视图：四张卡片分别进入列表 / 三条用途链路。 */
 function ModelTypeLanding({
   configsCount,
   loading,
@@ -244,6 +245,7 @@ interface ModelListViewProps {
   onOpenDetail: (config: ModelConfig) => void;
 }
 
+/** 模型列表视图：卡片式展示所有配置，支持新建与进入详情。 */
 function ModelListView({ configs, loading, selectedId, onBack, onCreate, onOpenDetail }: ModelListViewProps) {
   return (
     <section className="model-list-view">
@@ -296,6 +298,7 @@ interface PurposeModelViewProps {
   onOpenDetail: (config: ModelConfig) => void;
 }
 
+/** 用途分配视图：从模型列表中选择一条链路（写作/审稿/规划）使用的模型。 */
 function PurposeModelView({
   configs,
   currentId,
@@ -323,7 +326,8 @@ function PurposeModelView({
 
       <div className="model-catalog-grid">
         {configs.map((config) => {
-          const isCurrent = currentId === config.id;
+          // 当前链路选中的模型卡片置为高亮并禁用重复选择。
+  const isCurrent = currentId === config.id;
           return (
             <article className={`purpose-card${isCurrent ? " active" : ""}`} key={config.id}>
               <div className="purpose-card-main">
@@ -368,6 +372,7 @@ interface ModelSummaryCardProps {
   onOpen: () => void;
 }
 
+/** 模型摘要卡片：列表页中的轻量展示单元，点击进入详情。 */
 function ModelSummaryCard({ config, selected, onOpen }: ModelSummaryCardProps) {
   return (
     <button className={`model-summary-card${selected ? " active" : ""}`} type="button" onClick={onOpen}>
@@ -398,6 +403,10 @@ interface ModelDetailViewProps {
   onTest: () => void;
 }
 
+/**
+ * 模型详情表单视图：维护单个模型的调用信息（服务商、地址、密钥、用途、成本估算）。
+ * 交互要点：可从服务商拉取可用模型列表、测试连通性；新建与编辑复用同一表单。
+ */
 function ModelDetailView({
   draft,
   saving,
@@ -412,6 +421,7 @@ function ModelDetailView({
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [discoveringModels, setDiscoveringModels] = useState(false);
   const [modelDiscoveryError, setModelDiscoveryError] = useState("");
+  // 已保存但不在最新模型列表中的值需要额外补一个选项，避免下拉框丢失当前值。
   const currentApiModelMissing =
     availableModels.length > 0 && draft.apiModel.trim().length > 0 && !availableModels.includes(draft.apiModel);
   const apiModelOptions = [
@@ -427,6 +437,7 @@ function ModelDetailView({
     ...availableModels.map((model) => ({ label: model, value: model }))
   ];
 
+  /** 从服务商拉取可用模型：成功后回填下拉；空结果或失败都给出明确提示。 */
   async function handleDiscoverModels() {
     setDiscoveringModels(true);
     setModelDiscoveryError("");
@@ -434,7 +445,8 @@ function ModelDetailView({
     try {
       const models = await discoverAvailableModels(draft);
       setAvailableModels(models);
-      if (!draft.apiModel.trim() && models[0]) {
+      // 若当前未填模型名，自动采用第一个可用模型，减少一次手动选择。
+  if (!draft.apiModel.trim() && models[0]) {
         onChange({ apiModel: models[0] });
       }
       if (models.length === 0) {
@@ -671,16 +683,19 @@ function ModelDetailView({
   );
 }
 
+/** 微元（每百万 Token 价格）转用户可读的美元单位；未填写时返回空串。 */
 function microsToUnits(value: number | undefined) {
   return value === undefined ? "" : String(value / 1_000_000);
 }
 
+/** 用户输入的价格转微元整数；空串或非法值返回 undefined 表示不估算。 */
 function unitsToMicros(value: string) {
   if (!value.trim()) return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed * 1_000_000) : undefined;
 }
 
+/** 更新定价字段：保持 capabilities 不可变更新；三项全空时清掉 pricing 避免留空对象。 */
 function updatePricing(
   capabilities: ModelConfig["capabilities"],
   field: "currency" | "promptMicrosPerMillionTokens" | "completionMicrosPerMillionTokens",

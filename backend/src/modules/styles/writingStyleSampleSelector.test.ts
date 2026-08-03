@@ -1,3 +1,4 @@
+// 测试：writingStyleSampleSelector 样本分档逻辑。
 import { describe, expect, it } from "vitest";
 import { selectWritingStyleSamples } from "./writingStyleSampleSelector.js";
 

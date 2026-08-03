@@ -1,3 +1,8 @@
+/**
+ * 文件职责：统一模型网关。业务模块只通过这里调用模型，内部负责 adapter 分发、重试退避、
+ * fallback 选择、取消传播、模型尝试审计与成本估算。
+ * 边界：不直接依赖任何厂商 SDK；没有可用模型配置时抛出 ModelGatewayError 而非返回空结果。
+ */
 import type { AppConfig } from "@ink-agent/contracts";
 import { getModelSecret } from "../models/secretStore.js";
 import { getModelRoutes, listModelConfigs } from "../models/modelConfigRepository.js";
@@ -22,12 +27,14 @@ import type {
 } from "./types.js";
 import { modelTestResult } from "./types.js";
 
+/** 已注册的模型服务商 adapter，通过 provider 名称索引。 */
 const adapters = new Map<string, ModelProviderAdapter>([
   [openaiCompatibleAdapter.providerType, openaiCompatibleAdapter],
   [ollamaAdapter.providerType, ollamaAdapter],
   [deepseekAdapter.providerType, deepseekAdapter]
 ]);
 
+/** 生成调用的可选配置：用途、fallback 模型、重试策略、默认超时、API Key 覆盖（测试用）与随机源。 */
 export interface ModelGatewayOptions {
   purpose?: Extract<ModelPurpose, "writing" | "review" | "planning">;
   fallbackModels?: ModelConfigRecord[];
@@ -37,10 +44,16 @@ export interface ModelGatewayOptions {
   random?: () => number;
 }
 
+/** 判断某个服务商是否已实现连接测试 adapter（未实现的配置可保存但无法测试）。 */
 export function hasModelProviderAdapter(provider: string) {
   return adapters.has(provider);
 }
 
+/**
+ * 列出某配置可用的模型名（用于前端下拉选择）。
+ * @param apiKeyOverride 测试场景可临时传入密钥，优先于 secrets 文件
+ * @throws 服务商未实现模型列表 adapter 时抛出错误
+ */
 export async function listAvailableModels(paths: WorkspacePaths, config: ModelConfigRecord, apiKeyOverride = "") {
   const adapter = adapters.get(config.provider);
 
@@ -84,6 +97,13 @@ export async function generateModelText(
   return generateModelTextWithFallback(paths, primaryModel, input, { apiKeyOverride });
 }
 
+/**
+ * 带 fallback 与重试的模型文本生成主流程。
+ * 策略：候选模型依次尝试，每个模型最多重试 maxAttemptsPerModel 次，全程不超过 maxTotalAttempts；
+ * 可重试的错误（超时/限流/服务不可用等）才会退避重试，认证与请求无效直接抛出；
+ * 每次尝试都会写入模型尝试审计，流式增量按窗口合并上报。
+ * @throws ModelGatewayError：全部候选耗尽后抛出最后一个错误；无可用模型时抛出 invalid_request
+ */
 export async function generateModelTextWithFallback(
   paths: WorkspacePaths,
   primaryModel: ModelConfigRecord,
@@ -113,8 +133,32 @@ export async function generateModelTextWithFallback(
 
   throwIfCancelled(signal);
 
+  // 流式输出按小窗口聚合后写入事件存储，避免每个 token 一条事件撑爆重放上限。
+  let deltaBuffer = "";
+  let deltaTimer: ReturnType<typeof setTimeout> | undefined;
+  const flushDeltaBuffer = () => {
+    if (deltaTimer) {
+      clearTimeout(deltaTimer);
+      deltaTimer = undefined;
+    }
+    if (!deltaBuffer || !activeContext) return;
+    const delta = deltaBuffer;
+    deltaBuffer = "";
+    activeContext.eventStore.appendEvent(activeContext.runId, {
+      type: "model_delta",
+      stage: activeContext.stage,
+      payload: { delta }
+    });
+  };
+  // 每收到一段增量后重置 400ms 定时器，空闲后统一落盘，防止高频小片段频繁写事件
+  const queueModelDelta = (chunk: string) => {
+    deltaBuffer += chunk;
+    if (!deltaTimer) deltaTimer = setTimeout(flushDeltaBuffer, 400);
+  };
+
   for (const model of candidates) {
     const adapter = adapters.get(model.provider);
+    // 跳过停用模型与未实现文本生成的 adapter
     if (!model.enabled || !adapter?.generateText) continue;
 
     for (let modelAttempt = 1; modelAttempt <= retry.maxAttemptsPerModel; modelAttempt += 1) {
@@ -133,14 +177,17 @@ export async function generateModelTextWithFallback(
       });
 
       try {
+        // 仅主模型且显式提供覆盖密钥时使用覆盖值，fallback 模型一律从 secrets 文件取
         const apiKey = model.id === primaryModel.id && options.apiKeyOverride
           ? options.apiKeyOverride
           : await getModelSecret(paths, model.id);
         const result = await adapter.generateText(model, apiKey, {
           ...input,
           timeoutMs,
-          signal
+          signal,
+          onDelta: queueModelDelta
         });
+        flushDeltaBuffer();
         const estimatedCost = estimateModelCost(model, result);
         activeContext?.eventStore.finishModelAttempt(attempt!.id, {
           status: "completed",
@@ -153,6 +200,12 @@ export async function generateModelTextWithFallback(
         });
         return result;
       } catch (error) {
+        // 失败时清空未落盘的流式缓冲，避免半截内容写入事件
+        if (deltaTimer) {
+          clearTimeout(deltaTimer);
+          deltaTimer = undefined;
+        }
+        deltaBuffer = "";
         const normalized = normalizeModelGatewayError(error, signal);
         lastError = normalized;
         activeContext?.eventStore.finishModelAttempt(attempt!.id, {
@@ -161,11 +214,13 @@ export async function generateModelTextWithFallback(
           error: serializeModelGatewayError(normalized)
         });
 
+        // 不可重试（认证/请求无效/已取消）直接终止整个流程
         if (!normalized.retryable) throw normalized;
         const hasAnotherAttemptForModel = modelAttempt < retry.maxAttemptsPerModel;
         const hasAttemptCapacity = totalAttempts < retry.maxTotalAttempts;
         if (hasAnotherAttemptForModel && hasAttemptCapacity) {
           try {
+            // 退避期间同样受取消信号约束：用户中断时以取消错误终止，而不是继续发请求
             await waitBeforeRetry(retry, modelAttempt, random, signal);
           } catch (delayError) {
             throw normalizeModelGatewayError(delayError, signal);
@@ -185,6 +240,10 @@ export async function generateModelTextWithFallback(
   });
 }
 
+/**
+ * 按优先级收集 fallback 模型：已路由模型 > 同用途模型 > 兼容用途的默认模型，
+ * 均排除主模型本身并去重；保证即使用途元数据过期也有可用替补。
+ */
 async function selectFallbackModels(
   paths: WorkspacePaths,
   primary: ModelConfigRecord,
@@ -211,6 +270,7 @@ async function selectFallbackModels(
   return uniqueModels([...routed, ...samePurpose, ...compatibleDefault]);
 }
 
+/** 按 id 去重，保持首个出现的顺序。 */
 function uniqueModels(models: ModelConfigRecord[]) {
   const seen = new Set<string>();
   return models.filter((model) => {
@@ -220,18 +280,23 @@ function uniqueModels(models: ModelConfigRecord[]) {
   });
 }
 
+/** 把模型用途归一化为网关支持的三种用途，其余一律按写作处理（写作是最常见调用场景）。 */
 function normalizePurpose(purpose: ModelPurpose): Extract<ModelPurpose, "writing" | "review" | "planning"> {
   return ["writing", "review", "planning"].includes(purpose)
     ? purpose as Extract<ModelPurpose, "writing" | "review" | "planning">
     : "writing";
 }
 
+/** 重试策略必须允许至少一次尝试，否则循环永远不会执行。 */
 function assertRetryPolicy(retry: AppConfig["models"]["retry"]) {
   if (retry.maxAttemptsPerModel < 1 || retry.maxTotalAttempts < 1) {
     throw new Error("模型重试次数必须大于 0");
   }
 }
 
+/**
+ * 指数退避：baseDelayMs * 2^(attempt-1)，叠加 0.8-1.2 的随机抖动避免多个请求同时重试（惊群）。
+ */
 async function waitBeforeRetry(
   retry: AppConfig["models"]["retry"],
   modelAttempt: number,
@@ -243,18 +308,21 @@ async function waitBeforeRetry(
   await abortableDelay(Math.min(retry.maxDelayMs, Math.round(exponential * jitter)), signal);
 }
 
+/** 把网关错误类型映射为模型尝试审计状态。 */
 function toAttemptStatus(error: ModelGatewayError) {
   if (error.kind === "cancelled") return "cancelled" as const;
   if (error.kind === "timeout") return "timed_out" as const;
   return "failed" as const;
 }
 
+/** 信号已中止时立即抛出取消错误，供重试循环在每次尝试前检查。 */
 function throwIfCancelled(signal?: AbortSignal) {
   if (signal?.aborted) {
     throw new ModelGatewayError({ kind: "cancelled", retryable: false });
   }
 }
 
+/** 按配置的每百万 token 单价估算本次调用成本（微货币单位），缺少用量或定价数据时返回 null。 */
 function estimateModelCost(config: ModelConfigRecord, result: ModelGenerateTextResult) {
   const pricing = readPricing(config.capabilities.pricing);
   const promptTokens = result.tokenUsage?.promptTokens;
@@ -270,6 +338,7 @@ function estimateModelCost(config: ModelConfigRecord, result: ModelGenerateTextR
   };
 }
 
+/** 校验并读取配置中的定价信息：币种必须是三位大写字母，单价必须为非负有限数值，否则视为无效定价。 */
 function readPricing(value: unknown) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const pricing = value as Record<string, unknown>;

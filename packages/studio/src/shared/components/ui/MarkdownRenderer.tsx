@@ -5,17 +5,18 @@ interface MarkdownRendererProps {
 }
 
 /**
- * 轻量 Markdown 渲染组件。
+ * 轻量 Markdown 渲染组件（共享）。
  *
  * 第一版只做前端预览，不引入外部依赖：
- * - 支持标题、段落、无序列表、有序列表、引用、代码块、分割线。
- * - 支持行内加粗和行内代码。
- * 后续如果需要完整 GFM，可以替换为统一的 markdown-it/remark 渲染管线。
+ * - 块级：标题（1-3 级）、段落、无序/有序列表、引用、代码块、分割线。
+ * - 行内：加粗、行内代码。
+ * 后续如需完整 GFM 可整体替换为 markdown-it/remark 管线，本组件接口保持不变。
  */
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return <div className="markdown-preview">{renderMarkdownBlocks(content)}</div>;
 }
 
+/** 把 markdown 文本切分为块级 ReactNode 序列：按行扫描，逐块识别并消费连续行。 */
 function renderMarkdownBlocks(content: string) {
   const lines = content.replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
@@ -25,11 +26,13 @@ function renderMarkdownBlocks(content: string) {
     const line = lines[index] ?? "";
     const trimmedLine = line.trim();
 
+    // 空行跳过：段落之间用空行分隔，本身不产出节点。
     if (!trimmedLine) {
       index += 1;
       continue;
     }
 
+    // 代码块：以 ``` 开头，收集到下一个 ``` 为止，内部内容原样输出。
     if (trimmedLine.startsWith("```")) {
       const codeLines: string[] = [];
       index += 1;
@@ -48,12 +51,14 @@ function renderMarkdownBlocks(content: string) {
       continue;
     }
 
+    // 分割线：一行纯 --- 视为水平线。
     if (/^---+$/.test(trimmedLine)) {
       blocks.push(<hr key={`hr-${index}`} />);
       index += 1;
       continue;
     }
 
+    // 标题：支持 1-3 级，行内语法交给行内渲染器处理。
     const headingMatch = /^(#{1,3})\s+(.+)$/.exec(trimmedLine);
     if (headingMatch) {
       const level = headingMatch[1].length;
@@ -71,6 +76,7 @@ function renderMarkdownBlocks(content: string) {
       continue;
     }
 
+    // 引用：连续以 > 开头的行合并为一个 blockquote。
     if (trimmedLine.startsWith(">")) {
       const quoteLines: string[] = [];
 
@@ -83,6 +89,7 @@ function renderMarkdownBlocks(content: string) {
       continue;
     }
 
+    // 无序列表：连续以 -/* 开头的行合并为一个 ul。
     if (/^[-*]\s+/.test(trimmedLine)) {
       const items: string[] = [];
 
@@ -101,6 +108,7 @@ function renderMarkdownBlocks(content: string) {
       continue;
     }
 
+    // 有序列表：连续以 "数字." 开头的行合并为一个 ol。
     if (/^\d+\.\s+/.test(trimmedLine)) {
       const items: string[] = [];
 
@@ -119,6 +127,7 @@ function renderMarkdownBlocks(content: string) {
       continue;
     }
 
+    // 普通段落：连续非空且不是其他块起始符的行合并为一个 p。
     const paragraphLines: string[] = [];
     while (index < lines.length && (lines[index] ?? "").trim()) {
       const currentLine = (lines[index] ?? "").trim();
@@ -144,6 +153,7 @@ function renderMarkdownBlocks(content: string) {
   return blocks;
 }
 
+/** 行内渲染：识别 **加粗** 与 `行内代码`，其余文本原样输出。 */
 function renderInlineMarkdown(text: string) {
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
 

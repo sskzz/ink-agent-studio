@@ -1,3 +1,8 @@
+/**
+ * 写作风格仓储层。
+ * 职责：管理风格详情的磁盘布局——样本/版本/编译缓存三类索引文件与内容文件，提供增删改查；
+ * 边界：不包含业务规则（校验在上层 service）；版本文件按内容寻址保存、写入幂等；删除样本只移出索引、保留原文件以支持历史哈希追踪。
+ */
 import type { z } from "zod";
 import {
   styleSamplesIndexSchema,
@@ -17,6 +22,7 @@ import { createConstraintResolutionTrace } from "../constraints/constraintResolv
 
 type WritingStyleRecord = z.infer<typeof writingStyleRecordSchema>;
 
+/** 确保风格目录结构存在并初始化空索引，返回路径集合。 */
 export async function ensureWritingStyleDirectories(paths: WorkspacePaths, styleId: string) {
   const stylePaths = createWritingStylePaths(paths, styleId);
   await Promise.all([
@@ -32,16 +38,19 @@ export async function ensureWritingStyleDirectories(paths: WorkspacePaths, style
   return stylePaths;
 }
 
+/** 把风格记录同步写为 style.json（索引与详情保持一致）。 */
 export async function syncWritingStyleDetail(paths: WorkspacePaths, style: WritingStyleRecord) {
   const stylePaths = await ensureWritingStyleDirectories(paths, style.id);
   await writeJsonFile(stylePaths.styleFile, style);
 }
 
+/** 列出风格全部样本（仅索引元数据，不含正文）。 */
 export async function listWritingStyleSamples(paths: WorkspacePaths, styleId: string) {
   const stylePaths = await ensureWritingStyleDirectories(paths, styleId);
   return readJsonFile(stylePaths.samplesIndexFile, styleSamplesIndexSchema, []);
 }
 
+/** 读取样本元数据与正文；样本不存在时抛 notFound。 */
 export async function getWritingStyleSample(paths: WorkspacePaths, styleId: string, sampleId: string) {
   const samples = await listWritingStyleSamples(paths, styleId);
   const sample = samples.find((item) => item.id === sampleId);
@@ -50,6 +59,7 @@ export async function getWritingStyleSample(paths: WorkspacePaths, styleId: stri
   return { ...sample, content: await readTextFile(stylePaths.sampleContentFile(sampleId)) };
 }
 
+/** 保存样本：更新索引、样本元数据文件与正文文件（原子写），新建样本置于索引头部。 */
 export async function saveWritingStyleSample(
   paths: WorkspacePaths,
   sample: WritingStyleSample,
@@ -76,6 +86,7 @@ export async function deleteWritingStyleSampleFile(paths: WorkspacePaths, styleI
   // 原始文件保留，已有不可变版本仍可通过哈希追踪；清理交由未来垃圾回收任务处理。
 }
 
+/** 列出风格全部版本（索引记录）。 */
 export async function listWritingStyleVersions(paths: WorkspacePaths, styleId: string) {
   const stylePaths = await ensureWritingStyleDirectories(paths, styleId);
   return readJsonFile(stylePaths.versionsIndexFile, styleVersionsIndexSchema, []);
@@ -89,9 +100,11 @@ export async function getWritingStyleVersion(paths: WorkspacePaths, styleId: str
   return readJsonFile(stylePaths.versionFile(versionId), writingStyleVersionSchema, {} as WritingStyleVersion);
 }
 
+/** 保存版本：版本文件按 id 内容寻址，已存在则直接返回（幂等），并更新版本索引。 */
 export async function saveWritingStyleVersion(paths: WorkspacePaths, version: WritingStyleVersion) {
   const parsed = writingStyleVersionSchema.parse(version);
   const stylePaths = await ensureWritingStyleDirectories(paths, version.styleId);
+  // 内容寻址幂等：同一 id 版本不重复写入
   if (await pathExists(stylePaths.versionFile(version.id))) {
     return getWritingStyleVersion(paths, version.styleId, version.id);
   }
@@ -112,6 +125,10 @@ export async function saveWritingStyleVersion(paths: WorkspacePaths, version: Wr
   return parsed;
 }
 
+/**
+ * 缓存编译后的风格约束（按 constraintHash 内容寻址）。
+ * resolution 字段先转成可序列化追踪记录再落盘，避免保存解析器内部对象。
+ */
 export async function cacheCompiledStyleConstraint(
   paths: WorkspacePaths,
   styleId: string,

@@ -1,3 +1,7 @@
+/**
+ * 顶层导航配置：导航项定义与外壳文案集中维护在此文件。
+ * 新增功能页时优先在 navigationItems 中补入口，侧边栏与顶栏会自动跟随渲染。
+ */
 import type { LucideIcon } from "lucide-react";
 import {
   BookOpenText,
@@ -11,6 +15,7 @@ import {
   WandSparkles
 } from "lucide-react";
 
+/** 导航项结构：to 为路由地址，section 决定侧边栏分组，eyebrow/description 用于顶栏与页面氛围文案。 */
 export interface NavigationItem {
   to: string;
   label: string;
@@ -96,6 +101,7 @@ export const navigationItems: NavigationItem[] = [
   }
 ];
 
+/** 外壳品牌与状态文案：集中维护，避免散落在组件中难以统一替换。 */
 export const shellCopy = {
   brandEyebrow: "Local-first",
   brandName: "Ink Agent",

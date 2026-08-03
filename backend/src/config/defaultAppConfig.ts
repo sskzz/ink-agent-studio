@@ -1,5 +1,9 @@
 import type { AppConfig } from "@ink-agent/contracts";
 
+/**
+ * 默认公共配置。
+ * 首次启动时写入 app-config.json；config/app-config.example.json 必须与它保持一致（有测试守护）。
+ */
 export const defaultAppConfig = {
   schemaVersion: "app-config.v1",
   revision: 1,

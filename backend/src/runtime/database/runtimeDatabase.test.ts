@@ -1,3 +1,4 @@
+// 运行数据库单测：WAL 与迁移应用、存量库迁移前自动备份。
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

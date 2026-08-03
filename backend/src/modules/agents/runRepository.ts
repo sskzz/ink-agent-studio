@@ -9,6 +9,10 @@ import { resolveInsideRoot } from "../../utils/safePath.js";
 import { createBookPaths } from "../books/bookPaths.js";
 import type { WorkspacePaths } from "../workspace/workspacePaths.js";
 
+/**
+ * 旧 Run 快照存储（文件职责）：为旧同步执行器提供 JSON 文件 + runs.jsonl 双写存储。
+ * 带作品归属的 Run 落在作品目录 runs/ 下，全局 Run 落在工作区 index/runs/ 下。
+ */
 function getRunPath(workspacePaths: WorkspacePaths, run: Pick<AgentRunRecord, "id" | "bookId">) {
   if (run.bookId) {
     return resolveInsideRoot(createBookPaths(workspacePaths, run.bookId).runsDir, `${run.id}.json`);
@@ -17,6 +21,11 @@ function getRunPath(workspacePaths: WorkspacePaths, run: Pick<AgentRunRecord, "i
   return resolveInsideRoot(workspacePaths.indexDir, "runs", `${run.id}.json`);
 }
 
+/**
+ * 创建运行记录内存对象（未落盘）。
+ * 入参：bookId/runType/inputJson 等业务字段。
+ * 返回值：初始状态为 running 的 AgentRunRecord。
+ */
 export function createRunRecord(input: {
   bookId?: string | null;
   runType: string;
@@ -47,6 +56,7 @@ export function createRunRecord(input: {
 /**
  * 保存运行快照。
  * 每个 run 都有独立 JSON 文件，同时追加到 runs.jsonl，便于问题追踪和后续恢复。
+ * 写文件采用原子替换（writeTextFileAtomic），避免写入中断损坏快照。
  */
 export async function saveRun(workspacePaths: WorkspacePaths, run: AgentRunRecord) {
   const runPath = getRunPath(workspacePaths, run);
@@ -56,6 +66,10 @@ export async function saveRun(workspacePaths: WorkspacePaths, run: AgentRunRecor
   return run;
 }
 
+/**
+ * 标记运行完成：写入输出与 Token/trace 审计后落盘。
+ * 入参：run——原快照；outputJson——任务输出；options——可选审计字段。
+ */
 export async function completeRun(
   workspacePaths: WorkspacePaths,
   run: AgentRunRecord,
@@ -74,6 +88,10 @@ export async function completeRun(
   return saveRun(workspacePaths, completed);
 }
 
+/**
+ * 标记运行失败：记录错误信息与失败现场后落盘。
+ * 入参：run——原快照；error——异常对象；options——可选审计字段。
+ */
 export async function failRun(
   workspacePaths: WorkspacePaths,
   run: AgentRunRecord,
@@ -90,6 +108,11 @@ export async function failRun(
   });
 }
 
+/**
+ * 按 runId 读取运行快照。
+ * 查找顺序：作品目录 runs/ → 工作区 index/runs/ → runs.jsonl 倒序扫描。
+ * 失败处理：全部找不到时抛 notFound，避免静默返回空对象掩盖数据丢失。
+ */
 export async function getRun(workspacePaths: WorkspacePaths, runId: string, bookId?: string | null) {
   const candidatePaths = bookId
     ? [resolveInsideRoot(createBookPaths(workspacePaths, bookId).runsDir, `${runId}.json`)]
@@ -104,6 +127,7 @@ export async function getRun(workspacePaths: WorkspacePaths, runId: string, book
   const logExists = await pathExists(workspacePaths.runsLogFile);
 
   if (logExists) {
+    // jsonl 倒序扫描：最新记录排在最前，命中即返回，避免遍历全量历史。
     const lines = (await readTextFile(workspacePaths.runsLogFile)).split(/\r?\n/).filter(Boolean);
     const found = lines
       .reverse()

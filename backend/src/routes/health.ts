@@ -1,6 +1,10 @@
 import { Hono } from "hono";
 import { jsonOk } from "../utils/http.js";
 
+/**
+ * 健康检查路由。
+ * GET /api/v1/health/ → 200 + { service, status, time }。
+ */
 export const healthRoute = new Hono();
 
 /**

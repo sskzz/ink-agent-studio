@@ -1,20 +1,28 @@
+/**
+ * 小说技能页：展示技能目录并切换启停状态。
+ * 技能只提供工作流约束、不直接改作品状态；列表与启停均走本地后端。
+ */
 import type { NovelSkillMetadata } from "@ink-agent/contracts";
 import { useEffect, useState } from "react";
 import { Badge } from "@/shared/components/ui/Badge";
 import { PageHeader } from "@/shared/components/ui/PageHeader";
 import { listSkills, setSkillEnabled } from "@/shared/api/skillsApi";
 
+/** 技能适用阶段 → 中文标签。 */
 const operationLabels: Record<string, string> = { planning: "规划", writing: "写作", review: "审稿" };
 
+/** 小说技能页主组件：加载技能目录并管理启停切换。 */
 export function SkillsPage() {
   const [skills, setSkills] = useState<NovelSkillMetadata[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
+  // 挂载时加载技能目录，失败时展示错误文案。
   useEffect(() => {
     void listSkills().then(setSkills).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setLoading(false));
   }, []);
 
+  /** 切换技能启停：成功后用后端返回的最新元数据原位替换列表条目。 */
   async function toggle(skill: NovelSkillMetadata) {
     try {
       const updated = await setSkillEnabled(skill.id, !skill.enabled);

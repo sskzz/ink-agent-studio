@@ -1,3 +1,4 @@
+// 测试文件：实体初始化快照的捕获/恢复，以及 AI 实体不覆盖用户实体的冲突保护。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

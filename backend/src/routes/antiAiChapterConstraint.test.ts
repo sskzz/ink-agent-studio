@@ -1,3 +1,4 @@
+// 全局反 AI 味约束注入测试：无写作风格的作品在续写时仍注入基线约束。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,6 @@
+/**
+ * 文件职责：settings.ts 契约的单元测试，覆盖部分更新与安全字面量（审批不可关闭）校验。
+ */
 import { describe, expect, it } from "vitest";
 import { appConfigPatchSchema } from "./settings.js";
 

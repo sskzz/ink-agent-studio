@@ -1,3 +1,4 @@
+// 测试：技能选择、预算保护与仓储自愈。
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

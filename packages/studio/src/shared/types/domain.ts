@@ -1,3 +1,9 @@
+/**
+ * 共享领域类型：作品、模型配置、运行记录等跨功能页复用的实体定义。
+ * 约定：与后端本地 Hono 服务的 JSON 结构保持一致，后端改动字段时优先同步此文件。
+ */
+
+/** 作品状态：撰写中 / 规划中 / 审稿中 / 已暂停。 */
 export type BookStatus = "drafting" | "planning" | "reviewing" | "paused";
 
 /**
@@ -40,6 +46,7 @@ export type ModelProvider =
  */
 export type ModelPurpose = "planning" | "writing" | "review" | "embedding" | "image";
 
+/** 作品库列表项摘要：用于作品卡片与列表渲染。 */
 export interface BookSummary {
   id: string;
   title: string;
@@ -49,6 +56,7 @@ export interface BookSummary {
   updatedAt: string;
 }
 
+/** 一次 Agent 任务的运行摘要：展示在运行记录页的事件流与状态时间线中。 */
 export interface AgentRun {
   id: string;
   name: string;
@@ -57,6 +65,7 @@ export interface AgentRun {
   startedAt: string;
 }
 
+/** 模型配置列表项摘要：用于模型列表页的轻量展示。 */
 export interface ModelProfile {
   id: string;
   name: string;
@@ -101,6 +110,7 @@ export type ModelConfigDraft = Omit<ModelConfig, "id" | "updatedAt"> & {
   id?: string;
 };
 
+/** 模型连通性测试结果：ok 表示可直接使用，message 为失败原因或成功提示。 */
 export interface ModelConnectionResult {
   ok: boolean;
   message: string;
@@ -119,6 +129,7 @@ export interface ModelUsageSettings {
   planningModelId: string | null;
 }
 
+/** 模型分析发现的单个问题：severity 决定列表中的警示级别，targetType 指明问题归属。 */
 export interface ModelAnalysisIssue {
   id: string;
   severity: "info" | "warning" | "critical";
@@ -128,6 +139,7 @@ export interface ModelAnalysisIssue {
   targetType: "config" | "route" | "system";
 }
 
+/** 单条调用链路（如“写作”）的配置体检结果：ready 表示该链路可直接使用。 */
 export interface ModelRouteAnalysis {
   routeKey: "writingModelId" | "reviewModelId" | "planningModelId";
   label: string;
@@ -138,6 +150,7 @@ export interface ModelRouteAnalysis {
   issues: string[];
 }
 
+/** 模型配置整体分析结果：汇总统计、各服务商/用途分布、链路体检、问题清单与改进建议。 */
 export interface ModelAnalysis {
   generatedAt: string;
   score: number;

@@ -1,3 +1,4 @@
+// 测试：styleReviewAggregator 三路审稿合并。
 import { describe, expect, it } from "vitest";
 import { combineStyleReviews } from "./styleReviewAggregator.js";
 

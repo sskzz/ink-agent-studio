@@ -1,3 +1,8 @@
+/**
+ * 写作风格服务（索引与基础 CRUD）。
+ * 职责：维护 styles 索引文件——列出/读取/创建/更新风格记录，以及样本分析预览（模型分析失败时降级为本地规则预览）；
+ * 边界：索引级写操作统一走 "__style-index__" 锁；分析接口只返回预览不落盘，落盘由 createWritingStyle 完成；风格的深层版本管理在 writingStyleVersionService。
+ */
 import { randomUUID } from "node:crypto";
 import {
   styleAnalyzeInputSchema,
@@ -20,14 +25,17 @@ import { createWritingStyleFeatureProfile, extractWritingStyleFeatures } from ".
 import { syncWritingStyleDetail } from "./writingStyleRepository.js";
 import { withWritingStyleLock } from "./writingStyleLock.js";
 
+/** 读取风格索引（缺文件时返回空数组）。 */
 async function readStyles(workspacePaths: WorkspacePaths) {
   return readJsonFile(workspacePaths.writingStylesFile, writingStylesIndexSchema, []);
 }
 
+/** 写回风格索引。 */
 async function writeStyles(workspacePaths: WorkspacePaths, styles: Awaited<ReturnType<typeof readStyles>>) {
   await writeJsonFile(workspacePaths.writingStylesFile, styles);
 }
 
+/** 列出全部写作风格。 */
 export async function listWritingStyles(workspacePaths: WorkspacePaths) {
   return readStyles(workspacePaths);
 }
@@ -44,6 +52,7 @@ export async function getWritingStyle(workspacePaths: WorkspacePaths, styleId: s
   return style;
 }
 
+/** 创建风格资产：带分析结果的标记为 degraded（未验证），纯草稿标记为 draft；新风格置于索引头部。 */
 export async function createWritingStyle(workspacePaths: WorkspacePaths, body: unknown) {
   const input = writingStyleCreateInputSchema.parse(body);
   const now = new Date().toISOString();
@@ -70,6 +79,7 @@ export async function createWritingStyle(workspacePaths: WorkspacePaths, body: u
   return style;
 }
 
+/** 局部更新风格记录（合并字段），id 与 updatedAt 由服务端强制维护，避免调用方篡改。 */
 export async function updateWritingStyleRecord(
   workspacePaths: WorkspacePaths,
   styleId: string,
@@ -87,6 +97,11 @@ export async function updateWritingStyleRecord(
   return next;
 }
 
+/**
+ * 分析风格样本（预览模式）。
+ * @param body 待分析输入（name/content/sampleFileName）
+ * @returns 预览风格记录：含模型分析结果 + 本地特征画像；失败时模型分析降级为本地规则预览
+ */
 export async function analyzeWritingStyle(workspacePaths: WorkspacePaths, body: unknown) {
   const input = styleAnalyzeInputSchema.parse(body);
   const { localStats, sampleContent } = extractWritingStyleFeatures(input.content, input.sampleFileName);
@@ -113,6 +128,7 @@ export async function analyzeWritingStyle(workspacePaths: WorkspacePaths, body: 
   };
 }
 
+/** 调用规划模型分析；模型未配置/停用/调用失败时降级为本地规则预览并附带警告。 */
 async function analyzeWithPlanningModel(
   workspacePaths: WorkspacePaths,
   input: {
@@ -145,6 +161,7 @@ async function analyzeWithPlanningModel(
   }
 }
 
+/** 解析规划模型配置：必须已路由且启用，否则抛出明确错误信息。 */
 async function getPlanningModelConfig(workspacePaths: WorkspacePaths) {
   const routes = await getModelRoutes(workspacePaths);
 
@@ -161,6 +178,7 @@ async function getPlanningModelConfig(workspacePaths: WorkspacePaths) {
   return config;
 }
 
+/** 解析模型 JSON：先 safeParse 校验 schema，失败抛出带原因的错，由上层降级。 */
 function parseModelAnalysis(text: string): WritingStyleAnalysis {
   const jsonText = extractJsonText(text);
   const payload = JSON.parse(jsonText) as unknown;
@@ -173,6 +191,7 @@ function parseModelAnalysis(text: string): WritingStyleAnalysis {
   return parsed.data;
 }
 
+/** 从模型输出中提取 JSON：兼容 ```json 代码围栏与裸 JSON 两种返回形式。 */
 function extractJsonText(text: string) {
   const trimmed = text.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -191,6 +210,10 @@ function extractJsonText(text: string) {
   return trimmed;
 }
 
+/**
+ * 本地规则预览：不调用模型，仅凭本地统计生成合规的分析记录，
+ * 保证规划模型不可用时用户仍能看到风格分析的基本结果。
+ */
 function createDeterministicAnalysis(
   input: {
     styleName: string;
@@ -201,6 +224,7 @@ function createDeterministicAnalysis(
   warnings: string[]
 ): WritingStyleAnalysis {
   const rhythm = input.localStats.averageLineLength > 42 ? "长句铺陈" : "短句推进";
+  // 置信度按样本规模收紧：截断样本不高于 80，短样本（<300 字）不高于 50，保证低置信度不被高估
   const confidence = Math.min(
     input.localStats.sampleTruncated ? 80 : 72,
     input.localStats.contentLength < 300 ? 50 : input.localStats.contentLength < 800 ? 65 : 72

@@ -1,6 +1,10 @@
+/**
+ * 作品列表视图：卡片式展示后端作品库数据，点击卡片进入详情。
+ */
 import { Badge } from "@/shared/components/ui/Badge";
 import type { BookDetail } from "../types";
 
+/** 作品列表组件：books 为空时展示引导文案。 */
 export function BookListView({ books, onOpenDetail }: { books: BookDetail[]; onOpenDetail: (bookId: string) => void }) {
   return (
     <section className="workspace-layout book-list-layout">

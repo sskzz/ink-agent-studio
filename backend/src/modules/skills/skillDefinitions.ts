@@ -1,5 +1,11 @@
+/**
+ * 内置技能定义。
+ * 职责：集中声明随应用自带的工作流技能（章节规划、续写、伏笔检查、连续性审查、去 AI 味、风格复刻）；
+ * 边界：内置技能是可审计的纯工作流说明，不包含模型调用、文件写入或工具授权；内容变更须同时升级索引哈希机制（自动升版本）。
+ */
 import type { NovelSkillOperation } from "@ink-agent/contracts";
 
+/** 内置技能定义：appliesTo 限定适用操作，triggerTerms 供选择器模糊匹配，priority 决定候选顺序。 */
 export interface BuiltinSkillDefinition {
   id: string;
   name: string;

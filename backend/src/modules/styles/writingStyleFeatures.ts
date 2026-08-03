@@ -1,10 +1,18 @@
+/**
+ * 写作风格特征提取。
+ * 职责：用纯规则从样本文本中计算可复现的表层文体指标（句长/段落/对白/人称/词类密度/标点/模板句式等），并抽取代表段落供模型语义分析；
+ * 边界：纯本地计算、无模型依赖；指标只做统计不做判断，语义风格判断在模型层；代表段落抽样保证单次分析输入长度有界。
+ */
 import type { WritingStyleLocalStats } from "./writingStyleAnalysisPrompt.js";
 import type { WritingStyleFeatureProfile } from "../../schemas/styleSchemas.js";
 
+/** 代表段落抽样上限：控制模型输入长度，超长文本按锚点抽样。 */
 const maxRepresentativeChars = 4000;
+/** 短句/长句字数阈值，用于节奏分档。 */
 const shortSentenceLimit = 15;
 const longSentenceLimit = 40;
 
+// 以下词表为启发式词典：覆盖常见网络小说词汇，漏词只会让密度偏低，不会造成误判
 const perceptionWords = ["看见", "看到", "望见", "听见", "听到", "闻到", "察觉", "感觉", "注意到", "意识到"];
 const psychologyWords = ["想", "想到", "觉得", "认为", "明白", "知道", "记得", "怀疑", "希望", "担心", "害怕", "后悔"];
 const actionWords = ["走", "跑", "站", "坐", "抬", "低", "转", "推", "拉", "拿", "放", "握", "抓", "看", "望", "笑", "摇头", "点头", "停", "退", "靠"];
@@ -19,11 +27,17 @@ const causalMarkers = ["因为", "所以", "因此", "之所以", "是因为", "
 const summaryMarkers = ["总之", "归根结底", "说到底", "这一刻", "他终于明白", "她终于明白", "这就是", "一切都", "原来"];
 const templatePatterns = [/(?:不是).{0,20}(?:而是)/gu, /(?:仿佛|似乎|宛如|好像).{0,24}(?:一般|一样)?/gu, /(?:不仅).{0,20}(?:而且|还)/gu, /(?:既).{0,16}(?:又)/gu];
 
-/** 提取可复现、可解释的表层文体证据；语义风格仍由模型结合代表段落判断。 */
+/**
+ * 提取可复现、可解释的表层文体证据；语义风格仍由模型结合代表段落判断。
+ * @param content 样本文本
+ * @param sampleFileName 文件名（用于推断文件类型）
+ * @returns 本地统计 + 代表段落（超长文本按位置锚点抽样）
+ */
 export function extractWritingStyleFeatures(content: string, sampleFileName: string) {
   const source = content.trim();
   const rawLines = source.split(/\r?\n/);
   const paragraphs = rawLines.map((line) => line.trim()).filter(Boolean);
+  // 以句末标点切分句子（省略号视为句末），过滤空串
   const sentences = source.split(/[。！？!?…]+/u).map((item) => item.trim()).filter(Boolean);
   const sentenceLengths = sentences.map((sentence) => sentence.length);
   const paragraphLengths = paragraphs.map((paragraph) => paragraph.length);
@@ -33,6 +47,7 @@ export function extractWritingStyleFeatures(content: string, sampleFileName: str
   const pureDialogueCount = dialogueParagraphs.filter((paragraph) => isPureDialogue(paragraph)).length;
   const dialogueWithActionCount = dialogueParagraphs.filter((paragraph) => !isPureDialogue(paragraph)).length;
   const normalizedCharacters = Array.from(source.replace(/\s/gu, ""));
+  // 代表段落抽样：全文短时直接用全文，超长时按 0/20%/40%/60%/80%/100% 锚点位置取段落并均分字符预算
   const representativeSample = sampleRepresentativeParagraphs(paragraphs, maxRepresentativeChars);
 
   const stats: WritingStyleLocalStats = {
@@ -124,10 +139,14 @@ export function createWritingStyleFeatureProfile(stats: WritingStyleLocalStats):
   };
 }
 
+/** 段落是否含对白引号 */
 function hasDialogue(paragraph: string) { return /[“”「」『』"]/u.test(paragraph); }
+/** 整段是否为纯对白（整段被引号包裹） */
 function isPureDialogue(paragraph: string) { return /^(?:[“「『"]).+(?:[”」』"])[。！？!?…]*$/u.test(paragraph); }
+/** 统计引号内对白字符数，用于对白占比计算 */
 function extractDialogueCharacters(content: string) { return [...content.matchAll(/[“「『"]([^”」』"]+)[”」』"]/gu)].reduce((sum, match) => sum + (match[1]?.length ?? 0), 0); }
 
+/** 超长文本抽样：按 0/20%/…/100% 锚点位置选段落，均分字符预算逐段截取，保证采样覆盖全文而非只取开头。 */
 function sampleRepresentativeParagraphs(paragraphs: string[], limit: number) {
   const complete = paragraphs.join("\n");
   if (complete.length <= limit) return complete;
@@ -144,13 +163,17 @@ function standardDeviation(values: number[]) {
   const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
   return round(Math.sqrt(values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length));
 }
+/** 相邻句子的长短分档变化占比：衡量节奏起伏程度 */
 function calculateLengthTransitionRatio(lengths: number[]) {
   if (lengths.length < 2) return 0;
   const bands = lengths.map((length) => length <= shortSentenceLimit ? "short" : length >= longSentenceLimit ? "long" : "medium");
   return ratio(bands.slice(1).filter((band, index) => band !== bands[index]).length, bands.length - 1);
 }
+/** 最长连续命中数（如连续对白段数） */
 function maxConsecutive(values: boolean[]) { let max = 0; let current = 0; for (const value of values) { current = value ? current + 1 : 0; max = Math.max(max, current); } return max; }
+/** 词表密度：每千字的命中次数 */
 function density(content: string, words: string[]) { return round(countWords(content, words) * 1000 / Math.max(content.length, 1)); }
+/** 计数命中：先按词长降序匹配（长词优先），命中处用空格占位防止重叠计数 */
 function countWords(content: string, words: string[]) {
   let remaining = content;
   let count = 0;
@@ -161,14 +184,20 @@ function countWords(content: string, words: string[]) {
   }
   return count;
 }
+/** 字种数占比：衡量用词丰富度 */
 function lexicalDiversity(characters: string[]) { return ratio(new Set(characters).size, characters.length); }
+/** 重复 n-gram 占比：重复的 n-gram 每多出现一次计一次「多余重复」，除以总 n-gram 数 */
 function repeatedNgramRatio(characters: string[], size: number) {
   if (characters.length < size) return 0;
   const counts = new Map<string, number>();
   for (let index = 0; index <= characters.length - size; index++) { const gram = characters.slice(index, index + size).join(""); counts.set(gram, (counts.get(gram) ?? 0) + 1); }
   return ratio([...counts.values()].filter((count) => count > 1).reduce((sum, count) => sum + count - 1, 0), characters.length - size + 1);
 }
+/** 段首开头重复占比：取每段前 4 字，重复出现次数越多说明段落开头越模板化 */
 function repeatedOpeningRatio(paragraphs: string[]) { const openings = paragraphs.map((paragraph) => paragraph.slice(0, 4)).filter((opening) => opening.length >= 2); return ratio(openings.length - new Set(openings).size, openings.length); }
+/** 比例计算：total 为 0 时返回 0 */
 function ratio(value: number, total: number) { return total ? round(value / total) : 0; }
+/** 保留两位小数 */
 function round(value: number) { return Math.round(value * 100) / 100; }
+/** 正则命中次数 */
 function countMatches(content: string, pattern: RegExp) { return content.match(pattern)?.length ?? 0; }

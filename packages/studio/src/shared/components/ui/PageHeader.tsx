@@ -1,3 +1,8 @@
+/**
+ * 页面标题组件（共享）。
+ * 所有功能页统一使用它保证标题、说明与右侧操作区的间距稳定；
+ * actions 由调用方注入，窄屏时自然换行。
+ */
 import type { ReactNode } from "react";
 
 interface PageHeaderProps {

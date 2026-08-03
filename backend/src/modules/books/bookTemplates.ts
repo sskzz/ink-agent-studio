@@ -1,5 +1,10 @@
+/**
+ * 文件职责：作品核心 Markdown 文件的初始模板。
+ * 边界：纯字符串生成，无 I/O；模板中的占位文案引导 AI 后续填充。
+ */
 import type { BookRecord } from "../../types/domain.js";
 
+/** 故事基石（brief.md）模板：作品名、题材、创作方向、读者承诺；用户未提供简报时留 AI 补全位。 */
 export function createBriefMarkdown(book: BookRecord, userBrief = "") {
   return `# 故事基石
 
@@ -19,6 +24,7 @@ ${userBrief || "待 AI 根据作品属性生成可修改的作品简报。"}
 `;
 }
 
+/** 卷纲规划（outline.md）模板：章节推进计划与节奏规则。 */
 export function createOutlineMarkdown() {
   return `# 卷纲规划
 
@@ -32,6 +38,7 @@ export function createOutlineMarkdown() {
 `;
 }
 
+/** 世界观（world.md）模板：优先使用用户上传的世界观内容，否则生成占位并记录上传文件名。 */
 export function createWorldMarkdown(worldFileName = "", worldFileContent = "") {
   if (worldFileContent.trim()) {
     return worldFileContent;
@@ -47,6 +54,7 @@ ${worldFileName ? `已记录用户上传的世界观文件：${worldFileName}` :
 `;
 }
 
+/** 当前状态（current.md）模板：已公开信息、未公开伏笔、下一章目标。 */
 export function createCurrentStateMarkdown() {
   return `# 当前状态
 
@@ -61,6 +69,7 @@ export function createCurrentStateMarkdown() {
 `;
 }
 
+/** 伏笔池（foreshadowing.md）模板：伏笔投放/回收计划的 Markdown 表格。 */
 export function createForeshadowingMarkdown() {
   return `# 伏笔池
 

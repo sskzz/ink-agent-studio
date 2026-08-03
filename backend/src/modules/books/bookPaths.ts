@@ -1,6 +1,11 @@
+/**
+ * 文件职责：定义单本作品在本地工作区内的全部路径。
+ * 边界：只负责路径计算（含安全校验），不读写任何文件。
+ */
 import { resolveInsideRoot } from "../../utils/safePath.js";
 import type { WorkspacePaths } from "../workspace/workspacePaths.js";
 
+/** 单本作品的全部本地路径：根目录、JSON 索引、Markdown 文件与各实体目录。 */
 export interface BookPaths {
   bookDir: string;
   bookFile: string;

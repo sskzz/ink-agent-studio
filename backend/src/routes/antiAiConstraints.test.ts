@@ -1,3 +1,4 @@
+// 反 AI 味约束路由测试：只读概览接口暴露版本化规则注册表，写操作返回 404。
 import { describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
 

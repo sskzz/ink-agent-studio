@@ -1,3 +1,4 @@
+// 工作区租约单测：加锁/释放、并发占用冲突、过期锁（进程已死）回收。
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

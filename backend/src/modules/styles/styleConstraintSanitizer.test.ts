@@ -1,3 +1,4 @@
+// 测试：styleConstraintSanitizer 注入阻断与文本清洗。
 import { describe, expect, it } from "vitest";
 import { sanitizeStyleConstraint } from "./styleConstraintSanitizer.js";
 

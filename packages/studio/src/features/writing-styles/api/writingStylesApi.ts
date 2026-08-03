@@ -1,6 +1,11 @@
+/**
+ * 写作风格 API：列表、创建、AI 分析、样本与版本管理、重建与激活、约束预览。
+ * 负责把后端扁平记录（parameters 为 Record）组装为页面友好的 WritingStyle 结构。
+ */
 import { apiDelete, apiGet, apiPost } from "@/shared/api/http";
 import type { AnalysisResult, AntiAiRule, StyleParameter, WritingStyle } from "@/features/writing-styles/data/writingStyles";
 
+/** 后端风格记录：analysis/featureProfile 由分析接口写入，列表接口可能缺失。 */
 interface BackendWritingStyle {
   id: string;
   name: string;
@@ -17,6 +22,7 @@ interface BackendWritingStyle {
   status?: "draft" | "analyzing" | "ready" | "degraded" | "invalid";
 }
 
+/** 样本 DTO：quality.usable 标记样本是否可用于分析，warnings 为质检警告。 */
 export interface WritingStyleSampleDto {
   id: string;
   fileName: string;
@@ -26,6 +32,7 @@ export interface WritingStyleSampleDto {
   createdAt: string;
 }
 
+/** 版本 DTO：styleHash 定位版本内容，confidence 为分析置信度，status 决定可用性。 */
 export interface WritingStyleVersionDto {
   id: string;
   styleHash: string;
@@ -35,12 +42,14 @@ export interface WritingStyleVersionDto {
   createdAt: string;
 }
 
+/** 后端特征画像：仅分析成功时存在，作为 rawFeatureProfile 透传给页面。 */
 interface BackendStyleFeatureProfile {
   schemaVersion: "style-features.v1";
   sourceContentLength: number;
   metrics: Record<string, number>;
 }
 
+/** 后端分析记录：包含提示词片段、结构化参数与去 AI 味规则，其余字段透传。 */
 interface BackendStyleAnalysis {
   schemaVersion: string;
   summary: string;
@@ -54,6 +63,7 @@ interface BackendStyleAnalysis {
   [key: string]: unknown;
 }
 
+/** 创建风格入参：analysis 可选，未提供时后端按草稿保存。 */
 interface CreateWritingStyleInput {
   name: string;
   summary: string;
@@ -62,12 +72,14 @@ interface CreateWritingStyleInput {
   analysis?: AnalysisResult;
 }
 
+/** 分析入参：需要一份模板文本 content，供后端提取风格特征。 */
 interface AnalyzeWritingStyleInput {
   name: string;
   sampleFileName: string;
   content: string;
 }
 
+/** 后端时间戳格式化为 MM-DD HH:mm；非法时间返回“刚刚”占位。 */
 function formatDateTime(value: string) {
   const date = new Date(value);
 
@@ -83,6 +95,7 @@ function formatDateTime(value: string) {
   });
 }
 
+/** 参数值转展示文本：数字保留两位、对象 JSON 序列化、空值显示“待补充”。 */
 function toDisplayValue(value: unknown) {
   if (typeof value === "number") {
     return Number.isInteger(value) ? `${value}` : value.toFixed(2);
@@ -99,6 +112,7 @@ function toDisplayValue(value: unknown) {
   return JSON.stringify(value);
 }
 
+/** 把后端的参数 Record 组装为带中文标签与描述的 StyleParameter 列表；空记录时给占位条目。 */
 function createParametersFromSource(source: Record<string, unknown>): StyleParameter[] {
   const entries = Object.entries(source);
 
@@ -121,6 +135,7 @@ function createParametersFromSource(source: Record<string, unknown>): StyleParam
   }));
 }
 
+/** 组装 AnalysisResult：有后端分析时透传，否则基于表层参数生成占位分析，保证详情页永远有内容。 */
 function createAnalysis(record: BackendWritingStyle, parameters: StyleParameter[]): AnalysisResult {
   if (record.analysis) {
     return {
@@ -154,6 +169,7 @@ function createAnalysis(record: BackendWritingStyle, parameters: StyleParameter[
   };
 }
 
+/** 把后端记录组装为页面版 WritingStyle：统一指标取值、标签与占位兜底。 */
 function toWritingStyle(record: BackendWritingStyle): WritingStyle {
   const parameters = createParametersFromSource(record.analysis?.parameters ?? record.parameters);
   const analysis = createAnalysis(record, parameters);
@@ -181,6 +197,7 @@ function toWritingStyle(record: BackendWritingStyle): WritingStyle {
   };
 }
 
+/** 参数键的中文标签映射：未覆盖的键直接回显原键名。 */
 const parameterLabel: Record<string, string> = {
   averageLineLength: "平均行长",
   dialogueRatio: "对话比例",
@@ -203,6 +220,7 @@ const parameterLabel: Record<string, string> = {
   confidence: "置信度"
 };
 
+/** 参数键的业务含义说明：给参数列表每项加一句可读的解释。 */
 const parameterDescription: Record<string, string> = {
   averageLineLength: "用于判断文本更偏短句推进还是长句铺陈。",
   dialogueRatio: "用于估算对话在样本文本中的占比。",
@@ -225,11 +243,13 @@ const parameterDescription: Record<string, string> = {
   confidence: "规划模型对当前样本分析结果的置信度。"
 };
 
+/** 风格列表：全部记录组装为页面结构后返回。 */
 export async function listWritingStyles(): Promise<WritingStyle[]> {
   const records = await apiGet<BackendWritingStyle[]>("/writing-styles");
   return records.map(toWritingStyle);
 }
 
+/** 创建风格：分析结果（含原始分析/特征画像）随创建请求一并入库。 */
 export async function createWritingStyle(input: CreateWritingStyleInput): Promise<WritingStyle> {
   const analysis = toBackendAnalysis(input.analysis);
   const record = await apiPost<BackendWritingStyle>("/writing-styles", {
@@ -246,6 +266,7 @@ export async function createWritingStyle(input: CreateWritingStyleInput): Promis
   return toWritingStyle(record);
 }
 
+/** 反向组装后端分析记录：仅接受 v3 版本且带原始分析的输入，其余不落分析。 */
 function toBackendAnalysis(analysis: AnalysisResult | undefined): BackendStyleAnalysis | undefined {
   if (!analysis || analysis.schemaVersion !== "style-analysis.v3") {
     return undefined;
@@ -258,14 +279,17 @@ function toBackendAnalysis(analysis: AnalysisResult | undefined): BackendStyleAn
   return undefined;
 }
 
+/** 类型守卫：值是否为普通对象（排除 null 与数组）。 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** 类型守卫：是否为后端特征画像结构（v1 schema + metrics 对象）。 */
 function isFeatureProfile(value: unknown): value is BackendStyleFeatureProfile {
   return isRecord(value) && value.schemaVersion === "style-features.v1" && isRecord(value.metrics);
 }
 
+/** AI 分析风格：后端用样本内容提取特征后落库并返回完整风格。 */
 export async function analyzeWritingStyle(input: AnalyzeWritingStyleInput): Promise<WritingStyle> {
   const record = await apiPost<BackendWritingStyle>("/writing-styles/analyze", {
     name: input.name || "AI 分析风格",
@@ -276,30 +300,37 @@ export async function analyzeWritingStyle(input: AnalyzeWritingStyleInput): Prom
   return toWritingStyle(record);
 }
 
+/** 风格样本列表：供“模板作品”管理面板展示样本质检状态。 */
 export async function listWritingStyleSamples(styleId: string) {
   return apiGet<WritingStyleSampleDto[]>(`/writing-styles/${styleId}/samples`);
 }
 
+/** 新增样本：上传文件名为 key 的本地文本，参与后续重建分析。 */
 export async function addWritingStyleSample(styleId: string, input: { fileName: string; content: string }) {
   return apiPost<WritingStyleSampleDto>(`/writing-styles/${styleId}/samples`, input);
 }
 
+/** 删除样本：同时移除该文件在风格中的参与权重。 */
 export async function deleteWritingStyleSample(styleId: string, sampleId: string) {
   return apiDelete<{ id: string; deleted: boolean }>(`/writing-styles/${styleId}/samples/${sampleId}`);
 }
 
+/** 风格版本历史：用于版本化管理与回溯。 */
 export async function listWritingStyleVersions(styleId: string) {
   return apiGet<WritingStyleVersionDto[]>(`/writing-styles/${styleId}/versions`);
 }
 
+/** 用当前样本重建风格：样本变更后生成新版本。 */
 export async function rebuildWritingStyle(styleId: string) {
   return apiPost<Record<string, unknown>>(`/writing-styles/${styleId}/rebuild`, {});
 }
 
+/** 激活指定版本：作品引用该风格时使用激活版本。 */
 export async function activateWritingStyleVersion(styleId: string, versionId: string) {
   return apiPost<Record<string, unknown>>(`/writing-styles/${styleId}/versions/${versionId}/activate`, {});
 }
 
+/** 预览风格约束注入：给定场景/指令/大纲，预览约束在提示词中的落点。 */
 export async function previewWritingStyleConstraint(styleId: string, input: { sceneType?: string; instruction?: string; outline?: string } = {}) {
   return apiPost<Record<string, unknown>>(`/writing-styles/${styleId}/constraint-preview`, input);
 }

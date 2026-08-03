@@ -5,11 +5,17 @@ import { ensureWorkspace } from "./modules/workspace/workspaceService.js";
 import { createApplicationServices } from "./runtime/applicationServices.js";
 import { registerGracefulShutdown } from "./runtime/gracefulShutdown.js";
 
+/**
+ * 后端进程入口。
+ * 启动顺序：加载环境变量 → 建工作区目录 → 获取工作区写锁 → 初始化配置/数据库 →
+ * 导入旧 Run 数据并恢复未完成任务 → 启动 HTTP 服务 → 注册优雅关闭。
+ * 任何一步失败都会释放已获取的资源（数据库、锁）后以非零码退出。
+ */
 const port = Number(process.env.PORT ?? 8787);
 
 /**
- * 后端启动入口。
- * 启动 HTTP 服务前先初始化本地工作区，避免接口第一次读写时目录不存在。
+ * 启动引导流程。
+ * 数据库初始化前先取工作区写锁，保证迁移期间没有第二个进程写同一数据目录。
  */
 async function bootstrap() {
   const services = createApplicationServices();
@@ -22,6 +28,7 @@ async function bootstrap() {
       busyTimeoutMs: config.storage.sqliteBusyTimeoutMs,
       backupBeforeMigration: config.storage.backupBeforeMigration
     });
+    // 启动期一次性的恢复工作：导入旧 JSONL Run、回收中断的补丁应用、恢复未完成的流程。
     const legacyImport = await services.legacyRunImporter.import();
     await services.patchService.recoverIncompleteApplications();
     const runRecovery = await services.runCoordinator.recoverAndResumeRequiredWorkflows();
@@ -30,6 +37,7 @@ async function bootstrap() {
       {
         fetch: app.fetch,
         port,
+        // 只监听本机回环地址：桌面端与前端开发服务器同机访问，不对外网暴露。
         hostname: "127.0.0.1"
       },
       () => {
@@ -55,6 +63,7 @@ async function bootstrap() {
 
     registerGracefulShutdown(server, services);
   } catch (error) {
+    // 启动失败清理：关数据库并释放锁，避免锁文件残留阻止下次启动。
     services.runtimeDatabase.close();
     await services.workspaceLease.release();
     throw error;

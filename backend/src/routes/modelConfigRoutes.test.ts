@@ -1,3 +1,4 @@
+// 模型配置路由测试：路由就绪判定、模型发现去重排序、HTML 错误响应、规划模型生成 v3 风格分析。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

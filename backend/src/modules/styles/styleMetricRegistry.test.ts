@@ -1,3 +1,4 @@
+// 测试：styleMetricRegistry 度量定义域与夹取。
 import { describe, expect, it } from "vitest";
 import { clampStyleMetric } from "./styleMetricRegistry.js";
 

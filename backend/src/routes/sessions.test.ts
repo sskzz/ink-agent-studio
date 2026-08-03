@@ -1,3 +1,4 @@
+// 会话路由测试：创建、消息追加、全文搜索、归档全流程。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

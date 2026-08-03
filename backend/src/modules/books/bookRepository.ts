@@ -1,3 +1,7 @@
+/**
+ * 文件职责：作品（book）的本地存储仓库：索引列表、单本读写、目录与默认文件创建、整本删除。
+ * 边界：只做文件系统持久化与基础校验，不处理业务校验（由 bookService 负责）。
+ */
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { booksIndexSchema, bookRecordSchema } from "../../schemas/bookSchemas.js";
@@ -16,17 +20,21 @@ import {
   createWorldMarkdown
 } from "./bookTemplates.js";
 
+/** 缺失索引文件时按空数组兜底，保证首次启动即可读。 */
 const emptyEntitiesSchema = booksIndexSchema.transform(() => []);
 const emptyChaptersSchema = booksIndexSchema.transform(() => []);
 
+/** 读取作品索引列表，文件不存在时返回空数组。 */
 export async function listBooks(workspacePaths: WorkspacePaths) {
   return readJsonFile(workspacePaths.booksIndexFile, booksIndexSchema, []);
 }
 
+/** 写入作品索引列表（整体覆盖）。 */
 async function writeBooksIndex(workspacePaths: WorkspacePaths, books: BookRecord[]) {
   await writeJsonFile(workspacePaths.booksIndexFile, books);
 }
 
+/** 读取单本作品，book.json 不存在视为"作品不存在"。 */
 export async function getBook(workspacePaths: WorkspacePaths, bookId: string) {
   const paths = createBookPaths(workspacePaths, bookId);
 
@@ -37,6 +45,7 @@ export async function getBook(workspacePaths: WorkspacePaths, bookId: string) {
   return readJsonFile(paths.bookFile, bookRecordSchema, {} as BookRecord);
 }
 
+/** 读取作品的附属文件索引，并把可能缺失的 parsedJson 归一为 null。 */
 export async function getBookFiles(workspacePaths: WorkspacePaths, bookId: string) {
   const paths = createBookPaths(workspacePaths, bookId);
   const files = await readJsonFile(paths.filesIndexFile, bookFilesIndexSchema, []);
@@ -46,6 +55,7 @@ export async function getBookFiles(workspacePaths: WorkspacePaths, bookId: strin
   })) as BookFileRecord[];
 }
 
+/** 保存作品：更新索引（已存在则替换，否则插入头部）并写 book.json。 */
 export async function saveBook(workspacePaths: WorkspacePaths, book: BookRecord) {
   const books = await listBooks(workspacePaths);
   const nextBooks = books.some((item) => item.id === book.id)
@@ -57,6 +67,7 @@ export async function saveBook(workspacePaths: WorkspacePaths, book: BookRecord)
   return book;
 }
 
+/** 创建作品的五个核心 Markdown 占位文件记录（brief/outline/world/current-state/foreshadowing）。 */
 function createCoreFiles(book: BookRecord, now: string): BookFileRecord[] {
   return [
     {
@@ -167,6 +178,10 @@ export async function createBookStorage(
   };
 }
 
+/**
+ * 删除作品：先校验索引中存在，再递归删除整本书目录；运行日志按行过滤掉该作品的记录。
+ * @throws notFound 作品不存在时
+ */
 export async function deleteBookStorage(workspacePaths: WorkspacePaths, bookId: string) {
   const books = await listBooks(workspacePaths);
   const nextBooks = books.filter((book) => book.id !== bookId);
@@ -178,6 +193,7 @@ export async function deleteBookStorage(workspacePaths: WorkspacePaths, bookId: 
   const bookDir = createBookPaths(workspacePaths, bookId).bookDir;
   await rm(bookDir, { recursive: true, force: true });
 
+  // 逐行过滤 runs.jsonl：保留无法解析的行（防御脏数据），删除该作品所属的运行记录
   if (await pathExists(workspacePaths.runsLogFile)) {
     const retainedRuns = (await readTextFile(workspacePaths.runsLogFile))
       .split(/\r?\n/)
@@ -195,6 +211,7 @@ export async function deleteBookStorage(workspacePaths: WorkspacePaths, bookId: 
   await writeBooksIndex(workspacePaths, nextBooks);
 }
 
+/** 生成新的作品 ID（UUID）。 */
 export function createBookId() {
   return randomUUID();
 }

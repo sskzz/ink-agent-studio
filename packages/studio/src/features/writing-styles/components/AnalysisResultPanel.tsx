@@ -1,3 +1,7 @@
+/**
+ * AI 分析结果面板：新增风格流程中的实时分析预览（保存前不落库）。
+ * result 为空时展示等待态；ResultRow 同时被详情视图复用。
+ */
 import { Badge } from "@/shared/components/ui/Badge";
 import type { AnalysisResult } from "../data/writingStyles";
 
@@ -5,6 +9,7 @@ interface AnalysisResultPanelProps {
   result: AnalysisResult | null;
 }
 
+/** 分析预览面板：有结果时展示摘要/规则/提示词，无结果时给引导文案。 */
 export function AnalysisResultPanel({ result }: AnalysisResultPanelProps) {
   return (
     <aside className="style-analysis-panel analysis-result-panel">
@@ -59,6 +64,7 @@ export function AnalysisResultPanel({ result }: AnalysisResultPanelProps) {
   );
 }
 
+/** 单条分析结果行：标签 + 值，供摘要类内容复用。 */
 export function ResultRow({ label, value }: { label: string; value: string }) {
   return (
     <article className="analysis-result-item">

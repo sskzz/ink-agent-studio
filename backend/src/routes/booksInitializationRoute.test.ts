@@ -1,3 +1,4 @@
+// 作品初始化路由测试：创建后自动启动初始化 Run、手动重试复用、入队失败时回滚作品。
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

@@ -1,3 +1,8 @@
+/**
+ * 文件职责：作品附属文件（brief/outline/world/current_state/foreshadowing/imports）服务：
+ * 列表、内容读写、上传与快照捕获/恢复（供 AI 流程失败回滚）。
+ * 边界：只接受 Markdown 内容，路径一律经 resolveInsideRoot 防穿越；不解析语义。
+ */
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -16,29 +21,35 @@ import { getBook } from "../books/bookRepository.js";
 import type { WorkspacePaths } from "../workspace/workspacePaths.js";
 import { parseMarkdown } from "./markdownParser.js";
 
+/** 读取作品文件索引（files.json），缺失时返回空数组。 */
 async function readFiles(workspacePaths: WorkspacePaths, bookId: string) {
   const bookPaths = createBookPaths(workspacePaths, bookId);
   return readJsonFile(bookPaths.filesIndexFile, bookFilesIndexSchema, []);
 }
 
+/** 写入文件索引（整体覆盖）。 */
 async function writeFiles(workspacePaths: WorkspacePaths, bookId: string, files: BookFileRecord[]) {
   await writeJsonFile(createBookPaths(workspacePaths, bookId).filesIndexFile, files);
 }
 
+/** 按文件记录里的相对路径解析真实路径，防止路径穿越。 */
 function resolveBookFilePath(workspacePaths: WorkspacePaths, bookId: string, file: BookFileRecord) {
   return resolveInsideRoot(createBookPaths(workspacePaths, bookId).bookDir, file.path);
 }
 
+/** 文件快照：索引 + 指定文件的内容，用于 AI 流程修改前的备份与失败恢复。 */
 export interface BookFilesSnapshot {
   files: BookFileRecord[];
   contents: Array<{ fileId: string; content: string }>;
 }
 
+/** 文件列表（先校验作品存在）。 */
 export async function listBookFiles(workspacePaths: WorkspacePaths, bookId: string) {
   await getBook(workspacePaths, bookId);
   return readFiles(workspacePaths, bookId);
 }
 
+/** 捕获指定文件的快照；目标文件不存在则抛 notFound。 */
 export async function captureBookFilesSnapshot(
   workspacePaths: WorkspacePaths,
   bookId: string,
@@ -53,6 +64,7 @@ export async function captureBookFilesSnapshot(
   return { files, contents };
 }
 
+/** 按快照原样恢复文件内容与索引，供 AI 流程失败时回滚。 */
 export async function restoreBookFilesSnapshot(
   workspacePaths: WorkspacePaths,
   bookId: string,
@@ -66,6 +78,7 @@ export async function restoreBookFilesSnapshot(
   await writeFiles(workspacePaths, bookId, snapshot.files);
 }
 
+/** 读取文件内容，并附带轻量 Markdown 解析结果（标题/字数/摘要）。 */
 export async function getBookFileContent(workspacePaths: WorkspacePaths, bookId: string, fileId: string) {
   const files = await listBookFiles(workspacePaths, bookId);
   const file = files.find((item) => item.id === fileId);
@@ -82,6 +95,7 @@ export async function getBookFileContent(workspacePaths: WorkspacePaths, bookId:
   };
 }
 
+/** 更新文件内容：重算内容哈希与解析结果，摘要为空时沿用旧摘要，再原子写入文件与索引。 */
 export async function updateBookFileContent(workspacePaths: WorkspacePaths, bookId: string, fileId: string, body: unknown) {
   const input = fileUpdateInputSchema.parse(body);
   const files = await listBookFiles(workspacePaths, bookId);
@@ -113,6 +127,10 @@ export async function updateBookFileContent(workspacePaths: WorkspacePaths, book
   };
 }
 
+/**
+ * 上传 Markdown 文件到 imports/ 目录。
+ * 文件名只取 basename 并校验 Markdown 后缀，防止路径穿越与任意文件类型。
+ */
 export async function uploadBookFile(workspacePaths: WorkspacePaths, bookId: string, body: unknown) {
   const input = fileUploadInputSchema.parse(body);
   const bookPaths = createBookPaths(workspacePaths, bookId);

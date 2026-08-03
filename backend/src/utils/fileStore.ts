@@ -1,6 +1,14 @@
 import { mkdir, readFile, rename, stat, unlink, writeFile, appendFile } from "node:fs/promises";
 import path from "node:path";
 
+/**
+ * 文件系统基础操作集合。
+ * 统一收敛 stat/读写/追加/原子替换的细节，业务代码只面对 promise 接口。
+ */
+
+/**
+ * 判断路径是否存在（不区分文件或目录）。
+ */
 export async function pathExists(filePath: string) {
   try {
     await stat(filePath);
@@ -10,10 +18,16 @@ export async function pathExists(filePath: string) {
   }
 }
 
+/**
+ * 递归创建目录；目录已存在时静默成功。
+ */
 export async function ensureDirectory(dirPath: string) {
   await mkdir(dirPath, { recursive: true });
 }
 
+/**
+ * 以 utf8 读取文本文件内容。
+ */
 export async function readTextFile(filePath: string) {
   return readFile(filePath, "utf8");
 }

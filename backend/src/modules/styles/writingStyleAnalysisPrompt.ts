@@ -1,3 +1,10 @@
+/**
+ * 写作风格分析 Prompt 构建。
+ * 职责：组装风格分析所需的 system/user Prompt，让模型输出符合字段契约的 JSON 风格资产；
+ * 边界：只产出 Prompt 字符串，不调用模型；本地可计算的统计特征（WritingStyleLocalStats）由程序注入，模型只做语义判断。
+ */
+
+/** 本地程序可计算的写作统计特征：节奏、段落、标点、人称、词类密度等，注入 Prompt 供模型参考。 */
 export interface WritingStyleLocalStats {
   contentLength: number;
   paragraphCount: number;
@@ -51,6 +58,7 @@ export interface WritingStyleLocalStats {
   detectedFileType: string;
 }
 
+/** 分析请求输入：风格名、样本内容与本地统计；analysisDepth 控制模型分析粒度（quick/standard/deep）。 */
 export interface WritingStylePromptInput {
   styleName: string;
   sampleFileName: string;
@@ -59,11 +67,15 @@ export interface WritingStylePromptInput {
   analysisDepth?: "quick" | "standard" | "deep";
 }
 
+/** 当前分析 Prompt 的字段契约版本，与 V2 语义编译（style-analysis.v4）区分开。 */
 export const STYLE_ANALYSIS_SCHEMA_VERSION = "style-analysis.v3";
 
 /**
+ * 构建分析 Prompt 对。
  * Prompt 只承担模型擅长的语义判断。可计算的节奏、段落和标点特征由本地程序提供，
  * 避免在每次请求中重复解释分析方法和输出示例。
+ * @param input 分析输入（含本地统计与样本文本）
+ * @returns systemPrompt 约束模型角色、userPrompt 描述任务与字段契约
  */
 export function buildWritingStyleAnalysisPrompts(input: WritingStylePromptInput) {
   return {

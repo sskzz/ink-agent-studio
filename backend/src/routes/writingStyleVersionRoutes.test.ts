@@ -1,3 +1,4 @@
+// 写作风格样本与版本路由测试：聚合样本生成不可变版本、旧版 v3 惰性迁移、只读不落盘、并发写串行化。
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

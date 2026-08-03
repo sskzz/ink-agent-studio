@@ -1,3 +1,8 @@
+/**
+ * 文件职责：DeepSeek 官方 API adapter。
+ * 边界：DeepSeek 官方 API 兼容 OpenAI Chat 协议，第一版完全委托 OpenAI Compatible 实现，
+ * 仅在协议出现分叉时在此扩展专属逻辑。
+ */
 import type { ModelProviderAdapter } from "../types.js";
 import { openaiCompatibleAdapter } from "./openaiCompatibleAdapter.js";
 
