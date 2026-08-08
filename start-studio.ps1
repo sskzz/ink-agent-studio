@@ -24,6 +24,52 @@ if ($CheckOnly) {
     exit 0
 }
 
+# ---------------------------------------------------------------------------
+# Stale process detection: a leftover backend/Vite process would keep serving
+# OLD code (e.g. the 90s timeout before the streaming fixes), making recent
+# changes invisible. Check the ports before installing dependencies so the
+# user is not kept waiting, and offer to stop the stale process.
+# ---------------------------------------------------------------------------
+$backendPort = 8787
+$studioPort = 5173
+
+function Get-ListeningProcessId([int]$Port) {
+    $connection = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $connection) { return $null }
+    return $connection.OwningProcess
+}
+
+function Get-ProcessLabel([int]$ProcessId) {
+    $process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+    if (-not $process) { return "PID $ProcessId" }
+    return "$($process.ProcessName) (PID $ProcessId)"
+}
+
+function Ensure-PortFree([int]$Port, [string]$ServiceName) {
+    $processId = Get-ListeningProcessId $Port
+    if (-not $processId) { return }
+    Write-Host ""
+    Write-Host "WARNING: Port $Port ($ServiceName) is already in use by $(Get-ProcessLabel $processId)." -ForegroundColor Yellow
+    Write-Host "A stale $ServiceName keeps serving OLD code, which makes recent fixes invisible." -ForegroundColor Yellow
+    $answer = Read-Host "Stop this process and start fresh? (y/N)"
+    if ($answer -ne "y" -and $answer -ne "Y") {
+        Write-Host "Continuing anyway; close the old console window manually if it keeps serving old code." -ForegroundColor DarkGray
+        return
+    }
+    Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 1500
+    $remaining = Get-ListeningProcessId $Port
+    if ($remaining) {
+        Write-Host "Port $Port is still occupied by $(Get-ProcessLabel $remaining)." -ForegroundColor Red
+        Write-Host "The stale process respawned (tsx watch). Please close its old console window manually, then re-run this script." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "Stopped the stale process; port $Port is free now." -ForegroundColor Green
+}
+
+Ensure-PortFree $backendPort "backend"
+Ensure-PortFree $studioPort "Studio (Vite)"
+
 $hasWorkspaceDependencies = Test-Path -LiteralPath $workspaceNodeModules
 if (-not $hasWorkspaceDependencies) {
     Write-Host "Workspace node_modules not found. Installing dependencies..." -ForegroundColor Yellow

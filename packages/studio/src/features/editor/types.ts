@@ -4,8 +4,8 @@
  */
 import type { LucideIcon } from "lucide-react";
 
-/** 编辑器右侧面板类型：作品详情 / 空态 / 章节 / 草稿 / 角色管理 / 新建实体。 */
-export type EditorPanelKind = "detail" | "empty" | "chapter" | "draft" | "role-manager" | "create-entity";
+/** 编辑器面板类型：作品详情 / 空态 / 章节 / 角色管理 / 新建实体。 */
+export type EditorPanelKind = "detail" | "empty" | "chapter" | "role-manager" | "create-entity";
 
 /** 编辑器字段：label 为表单项名，hint 为补充说明，value 为当前值。 */
 export interface EditorField {
@@ -16,6 +16,7 @@ export interface EditorField {
 
 /** 导航树节点：kind 决定点击后打开的面板，create* 配置用于“新建”入口。 */
 export interface EditorNavItem {
+  chapterId?: string;
   chips?: string[];
   createDescriptionLabel?: string;
   createNameLabel?: string;

@@ -61,4 +61,22 @@ describe("WorkspaceLease", () => {
     expect(record.pid).toBe(process.pid);
     await lease.release();
   });
+
+  // Windows 专属：PID 被系统复用给无关进程（后端已死但 pid 仍"存活"）时必须识别为过期锁。
+  // 锁记录 pid 指向当前测试进程（存活），但 startedAt 早于该进程的真实创建时间 → PID 复用。
+  // 非 Windows 平台无法查询进程创建时间，保守按占用处理，因此跳过。
+  it.runIf(process.platform === "win32")("recovers a lock whose pid was recycled by an unrelated process", async () => {
+    const { paths, lease } = await createLease();
+    await writeFile(paths.workspaceLockFile, JSON.stringify({
+      token: "recycled-token",
+      // 用当前测试进程的 pid 模拟"存活进程"，但其创建时间必然晚于 2000 年 → 判定为 PID 复用
+      pid: process.pid,
+      startedAt: "2000-01-01T00:00:00.000Z"
+    }), "utf8");
+
+    await expect(lease.acquire()).resolves.toBeUndefined();
+    const record = JSON.parse(await readFile(paths.workspaceLockFile, "utf8")) as { pid: number };
+    expect(record.pid).toBe(process.pid);
+    await lease.release();
+  });
 });

@@ -389,6 +389,21 @@ export const runtimeMigrations: RuntimeMigration[] = [
         SELECT RAISE(ABORT, 'approved user preference content is immutable');
       END;
     `
+  },
+  {
+    version: 9,
+    name: "create_chapter_memory",
+    sql: `
+      CREATE TABLE chapter_memory (
+        chapter_id TEXT PRIMARY KEY,
+        chapter_no INTEGER NOT NULL,
+        summary TEXT NOT NULL,
+        entities_json TEXT NOT NULL CHECK (json_valid(entities_json)),
+        created_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE INDEX chapter_memory_chapter_no_idx ON chapter_memory(chapter_no DESC);
+    `
   }
 ];
 

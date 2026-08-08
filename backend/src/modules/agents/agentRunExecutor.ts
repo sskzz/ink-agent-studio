@@ -3,9 +3,10 @@ import type { WorkspacePaths } from "../workspace/workspacePaths.js";
 import { completeRun, createRunRecord, failRun, saveRun } from "./runRepository.js";
 import { setActiveModelExecutionStage } from "../ai/modelExecutionContext.js";
 
-/** 旧同步执行器的阶段枚举（文件职责）：对应章节写作流水线的九个环节。 */
+/** 旧同步执行器的阶段枚举（文件职责）：对应章节写作流水线的十个环节。 */
 export type AgentRunStage =
   | "load_context"
+  | "chapter_intent"
   | "classify_scene"
   | "compile_constraints"
   | "generate"

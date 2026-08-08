@@ -45,6 +45,7 @@ export class RunCoordinator {
   private readonly queue: QueuedRun[] = [];
   private readonly active = new Map<string, ActiveRun>();
   private readonly pausedRuns = new Set<string>();
+  private readonly resumedRuns = new Set<string>();
   private pumpScheduled = false;
   private shuttingDown = false;
 
@@ -131,6 +132,7 @@ export class RunCoordinator {
 
     this.eventStore.appendEvent(runId, { type: "run_queued", payload: { resumed: true, fromStatus: snapshot.status } });
     this.queue.push({ runId, command: command.data });
+    this.resumedRuns.add(runId);
     this.schedulePump();
     return this.eventStore.getRun(runId);
   }
@@ -353,6 +355,12 @@ export class RunCoordinator {
         type: "run_completed",
         payload: { output, cancellationRequestedAfterCommit: committed && active.controller.signal.aborted }
       });
+      // 断点续写会话清除：续写 run 经 resume 续跑并完成后，删除 model_delta 事件与检查点
+      // （保留 run 快照与审计轨迹）。首跑完成保留（可审计，且初始化 run 的 model_delta 是前端实时输出数据源）。
+      if (active.command.type === "continue_chapter" && this.resumedRuns.has(active.runId)) {
+        this.resumedRuns.delete(active.runId);
+        this.eventStore.pruneRunRecoveryData(active.runId);
+      }
     } catch (error) {
       const snapshot = this.eventStore.getRun(active.runId);
       if (!["queued", "running", "cancelling"].includes(snapshot.status)) return;

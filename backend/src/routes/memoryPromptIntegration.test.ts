@@ -95,10 +95,13 @@ describe("memory prompt integration", () => {
     const chapterId = ((await response.json()) as ApiPayload<{ id: string }>).data.id;
 
     const prompts: string[] = [];
+    // 章节意图规划请求不携带记忆/稳定规则，单独排除后再断言
+    const contentPrompts: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
       const prompt = body.messages.map((message) => message.content).join("\n");
       prompts.push(prompt);
+      if (!prompt.includes("规划师")) contentPrompts.push(prompt);
       const content = prompt.includes("semantic-style-review.v1")
         ? JSON.stringify({ schemaVersion: "semantic-style-review.v1", passed: true, score: 95, violations: [], warnings: [] })
         : "她按住门把。脚步停了。";
@@ -117,9 +120,9 @@ describe("memory prompt integration", () => {
       expect(response.status).toBe(200);
     }
 
-    expect(prompts.length).toBeGreaterThanOrEqual(4);
-    expect(prompts.every((prompt) => prompt.includes("APPROVED_MEMORY_短段落"))).toBe(true);
-    expect(prompts.every((prompt) => !prompt.includes("PROPOSED_MEMORY_增加对白"))).toBe(true);
-    expect(prompts.every((prompt) => prompt.includes("不得覆盖 BookState"))).toBe(true);
+    expect(prompts.length).toBeGreaterThanOrEqual(5);
+    expect(contentPrompts.every((prompt) => prompt.includes("APPROVED_MEMORY_短段落"))).toBe(true);
+    expect(contentPrompts.every((prompt) => !prompt.includes("PROPOSED_MEMORY_增加对白"))).toBe(true);
+    expect(contentPrompts.every((prompt) => prompt.includes("不得覆盖 BookState"))).toBe(true);
   });
 });

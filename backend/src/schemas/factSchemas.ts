@@ -20,6 +20,8 @@ export const factCardSourceSchema = z.enum([
   "ai-story-graph",
   "ai-story-backbone",
   "ai-outline",
+  "ai-supporting-entities",
+  "ai-items",
   "ai-initial-state",
   "summary"
 ]);

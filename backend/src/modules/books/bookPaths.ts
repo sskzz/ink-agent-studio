@@ -17,6 +17,9 @@ export interface BookPaths {
   worldFile: string;
   currentStateFile: string;
   foreshadowingFile: string;
+  runtimeStateFile: string;
+  authorIntentFile: string;
+  currentFocusFile: string;
   chaptersDir: string;
   charactersDir: string;
   factionsDir: string;
@@ -46,6 +49,9 @@ export function createBookPaths(workspacePaths: WorkspacePaths, bookId: string):
     worldFile: resolveInsideRoot(bookDir, "world.md"),
     currentStateFile: resolveInsideRoot(stateDir, "current.md"),
     foreshadowingFile: resolveInsideRoot(stateDir, "foreshadowing.md"),
+    runtimeStateFile: resolveInsideRoot(stateDir, "runtime.json"),
+    authorIntentFile: resolveInsideRoot(stateDir, "author_intent.md"),
+    currentFocusFile: resolveInsideRoot(stateDir, "current_focus.md"),
     chaptersDir: resolveInsideRoot(bookDir, "chapters"),
     charactersDir: resolveInsideRoot(entitiesDir, "characters"),
     factionsDir: resolveInsideRoot(entitiesDir, "factions"),

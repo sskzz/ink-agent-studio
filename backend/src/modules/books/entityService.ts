@@ -27,12 +27,20 @@ function getEntityDir(workspacePaths: WorkspacePaths, bookId: string, entityType
   return dirMap[entityType];
 }
 
+/** 实体类型英文值到中文展示名的映射，用于实体 Markdown 文档的“类型”栏。 */
+const entityTypeLabels: Record<EntityType, string> = {
+  character: "角色",
+  faction: "势力",
+  location: "地点",
+  item: "物品"
+};
+
 /** 生成实体的 Markdown 文件内容（名称/类型/定位/描述）。 */
 function createEntityMarkdown(entity: BookEntityRecord) {
   return `# ${entity.name}
 
 ## 类型
-${entity.entityType}
+${entityTypeLabels[entity.entityType] ?? entity.entityType}
 
 ## 定位
 ${entity.role || "待补充"}

@@ -1,4 +1,4 @@
-// 运行数据库单测：WAL 与迁移应用、存量库迁移前自动备份。
+﻿// 运行数据库单测：WAL 与迁移应用、存量库迁移前自动备份。
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,7 +32,7 @@ describe("RuntimeDatabase", () => {
   it("enables WAL and applies the versioned schema", async () => {
     const { database, initialized } = await createDatabase();
 
-    expect(initialized.appliedMigrations.map((item) => item.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(initialized.appliedMigrations.map((item) => item.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(database.database.prepare("PRAGMA journal_mode").get()?.journal_mode).toBe("wal");
     expect(database.database.prepare("PRAGMA foreign_keys").get()?.foreign_keys).toBe(1);
     const tables = database.database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()
@@ -61,3 +61,4 @@ describe("RuntimeDatabase", () => {
     await expect(pathExists(initialized.backupFile!)).resolves.toBe(true);
   });
 });
+

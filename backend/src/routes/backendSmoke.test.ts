@@ -89,6 +89,14 @@ describe("backend routes smoke", () => {
     const chapterId = chapterPayload.data.id as string;
     expect(response.status).toBe(201);
 
+    response = await app.request(`/api/v1/books/${bookId}`);
+    const bookDetailPayload = (await response.json()) as ApiPayload<{
+      progress: { currentChapterId: string | null; currentChapterTitle: string | null };
+    }>;
+    expect(response.status).toBe(200);
+    expect(bookDetailPayload.data.progress.currentChapterId).toBe(chapterId);
+    expect(bookDetailPayload.data.progress.currentChapterTitle).toBe("1. Test Chapter");
+
     response = await app.request(`/api/v1/books/${bookId}/chapters/${chapterId}/continue`, {
       method: "POST",
       headers: { "content-type": "application/json" },

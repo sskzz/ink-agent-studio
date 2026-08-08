@@ -16,18 +16,20 @@ describe("combineStyleReviews", () => {
       stableMultiSample: true
     });
     expect(result.passed).toBe(false);
+    expect(result.verificationStatus).toBe("failed");
     expect(result.hardFailures).toHaveLength(1);
   });
 
-  it("keeps local review available when semantic review degrades", () => {
+  it("marks the result unavailable instead of treating local score as a full pass", () => {
     const result = combineStyleReviews({
       local: { passed: true, skipped: false, score: 82, sourceContentLength: 1000, generatedContentLength: 800, violations: [], warnings: [] },
       semantic: null,
       semanticDegradedReason: "review unavailable",
       stableMultiSample: true
     });
-    expect(result.passed).toBe(true);
-    expect(result.score).toBe(82);
+    expect(result.passed).toBe(false);
+    expect(result.verificationStatus).toBe("unavailable");
+    expect(result.score).toBeNull();
     expect(result.degraded).toBe(true);
   });
 });

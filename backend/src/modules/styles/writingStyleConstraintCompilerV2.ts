@@ -95,6 +95,13 @@ export function compileWritingStyleConstraintsV2(
       .filter((item) => styleSources.has(item.source) && !antiAiSources.has(item.source) && !(item.source === "style-metric" && item.metric))
       .map((item) => item.text)
   ], 780);
+  // 只有文本真实出现在最终 policy prompt 中才算 included；其余只表示已完成冲突消解。
+  const generationConstraintIds = resolution.applied
+    .filter((item) => {
+      const text = sanitizeStyleConstraint(item.text);
+      return Boolean(text && generationPrompt.includes(text));
+    })
+    .map((item) => item.id);
   const reviewPrompt = compact([reviewSnippet, antiAiPolicy.reviewPrompt, ...resolution.applied.filter((item) => item.source === "style-invariant").map((item) => item.text)], 900);
   const targetMetrics = Object.fromEntries(resolution.applied.filter((item) => item.metric).map((item) => [item.key.replace("metric:", ""), item.metric!]));
   // 哈希核心：凡是影响生成结果的输入（风格版本、场景、反 AI 策略、编译后 Prompt）都纳入哈希，
@@ -110,6 +117,7 @@ export function compileWritingStyleConstraintsV2(
     generationPrompt,
     reviewPrompt,
     targetMetrics,
+    generationConstraintIds,
     styleConstraints: resolution.applied
       .filter((item) => styleSources.has(item.source))
       .map((item) => ({ id: item.id, source: item.source, text: item.text, metric: item.metric ?? null }))

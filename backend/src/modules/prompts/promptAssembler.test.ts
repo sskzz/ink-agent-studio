@@ -21,6 +21,7 @@ describe("PromptAssembler", () => {
     expect(result.trace.layers.every((layer) => layer.estimatedTokens <= layer.budgetTokens)).toBe(true);
     expect(result.trace.layers.find((layer) => layer.name === "facts")?.truncated).toBe(true);
     expect(result.trace.layers[1].sources[0].sourceRef).toEqual({ fileId: "world" });
+    expect(result.trace.layers[1].sources[0].status).toBe("truncated");
     expect(result.trace.layers.map((layer) => layer.name)).toEqual(["stable", "facts", "memory", "scene", "skills", "turn"]);
   });
 

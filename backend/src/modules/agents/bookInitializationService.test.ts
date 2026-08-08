@@ -55,6 +55,8 @@ describe("initializeBookWithAi", () => {
     const systemPrompts: string[] = [];
     const purposes: string[] = [];
     const streams: Array<boolean | undefined> = [];
+    // 内存工件缓存：模拟生产环境的检查点恢复，让定向修复轮只重生成受损阶段
+    const artifactStore = new Map<string, { value: unknown }>();
     let committed = false;
     const responses = createStageResponses();
     const command: Extract<RunCommand, { type: "initialize_book" }> = {
@@ -72,12 +74,14 @@ describe("initializeBookWithAi", () => {
       },
       emitProgress() {},
       emitDelta() {},
-      saveArtifact(artifactType) {
+      saveArtifact(artifactType, value) {
         artifacts.push(artifactType);
+        artifactStore.set(artifactType, { value });
         return { id: `artifact-${artifacts.length}`, contentHash: `hash-${artifacts.length}` };
       },
-      loadArtifact() {
-        return null;
+      loadArtifact(artifactType) {
+        const stored = artifactStore.get(artifactType);
+        return stored ? { id: `artifact-${artifactType}`, contentHash: "hash", value: stored.value } : null;
       },
       saveCheckpoint(stage) {
         checkpoints.push(stage);
@@ -114,11 +118,13 @@ describe("initializeBookWithAi", () => {
       "supporting_entities",
       "items",
       "initial_state",
-      "consistency_review",
+      "review_entity_state",
+      "review_fact_fidelity",
+      "review_bundle",
       "apply_bundle"
     ]);
     expect(checkpoints).toEqual(stages);
-    expect(artifacts).toHaveLength(12);
+    expect(artifacts).toHaveLength(14);
     expect(committed).toBe(true);
     expect(systemPrompts[0]).toContain('"const": "book-foundation.v1"');
     expect(systemPrompts[0]).toContain('"minimum": 20000');
@@ -133,16 +139,20 @@ describe("initializeBookWithAi", () => {
       "planning",
       "planning",
       "planning",
+      "review",
+      "review",
       "review"
     ]);
-    expect(streams).toEqual(Array(10).fill(true));
+    expect(streams).toEqual(Array(12).fill(true));
     expect(prompts[1]).toContain("失踪姐姐引出的永夜阴谋");
     expect(prompts[2]).toContain("moon-coast");
+    // story_graph 产物的核心人物 id 进入 story_backbone 阶段的输入（stringifyPrompt 注入）
     expect(prompts[3]).toContain("hero-lin");
     expect(prompts[6]).toContain("old-tower");
     expect(prompts[6]).toContain("guide-su");
     expect(prompts[7]).toContain("moon-key");
-    expect(prompts[9]).toContain("月亮永远不会落下");
+    // 用户锁定世界观事实必须进入全局硬冲突审查（review_bundle）的输入
+    expect(prompts[11]).toContain("SECRET_WORLD_FACT：月亮永远不会落下。");
 
     const book = await getBook(paths, created.id);
     expect(book).toMatchObject({
@@ -190,23 +200,44 @@ describe("initializeBookWithAi", () => {
     expect(prompts[2]).toContain("[fact:world-rule-1]");
     expect(prompts[2]).toContain("【已确认设定摘要");
     expect(prompts[2]).toContain("[fact:region-moon-coast]");
-    expect(prompts[4]).toContain("[fact:backbone-start-1]");
-    expect(prompts[4]).toContain("[fact:backbone-key-1]");
+    // 骨架事实卡必须保留骨架事件的原始 id（而非按序号重建），保证伏笔文本的 ke-*/st-* 引用可解析
+    expect(prompts[4]).toContain("[fact:backbone-sister-missing]");
+    expect(prompts[4]).toContain("[fact:backbone-key-old-tower]");
     expect(prompts[6]).toContain("【不可变事实");
   });
 
-  it("rejects when initial state duplicates an event already planned in the outline", async () => {
+  it("rejects when initial state duplicates an event already fixed in the story backbone", async () => {
     const responses = createStageResponses();
     const initialState = responses[8] as { foreshadowing: Array<{ content: string }> };
-    initialState.foreshadowing[0].content = "月钥能开启旧塔核心";
+    // 骨架 startEvent 标题"姐姐失踪"不得被伏笔池重复安排为"新伏笔"
+    initialState.foreshadowing[0].content = "姐姐失踪";
 
-    await expect(runInitializationWithResponses(responses)).rejects.toThrow(/事件重复/);
+    await expect(runInitializationWithResponses(responses)).rejects.toThrow(/开场事件重复/);
+  });
+
+  it("rejects when the foreshadowing pool does not extend to the ending volume", async () => {
+    const base = createStageResponses();
+    const badInitialState = structuredClone(base[8]) as {
+      foreshadowing: Array<{ placement: string; resolution: string }>;
+    };
+    // 全书 1 卷，但伏笔投放/回收计划没有任何卷号标注 → 长线覆盖校验应触发修复轮，
+    // 修复轮重生成 initial_state 后问题依旧，最终在最大轮次后失败
+    badInitialState.foreshadowing[0].placement = "第五章首次使用月钥后";
+    badInitialState.foreshadowing[0].resolution = "终卷揭示记忆代价";
+    const responses = [
+      ...base.slice(0, 8),
+      badInitialState,
+      structuredClone(badInitialState),
+      structuredClone(badInitialState)
+    ];
+
+    await expect(runInitializationWithResponses(responses)).rejects.toThrow(/长线伏笔/);
   });
 
   it("rejects when the outline replans an event already fixed in the story backbone", async () => {
     const responses = createStageResponses();
-    const outlinePlan = responses[4] as { volumes: Array<{ foreshadowing: string[] }> };
-    outlinePlan.volumes[0].foreshadowing = ["姐姐失踪"];
+    const outlinePlan = responses[4] as { volumes: Array<{ characterChanges: string[] }> };
+    outlinePlan.volumes[0].characterChanges = ["姐姐失踪"];
 
     await expect(runInitializationWithResponses(responses)).rejects.toThrow(/时间线骨架重复/);
   });
@@ -214,21 +245,20 @@ describe("initializeBookWithAi", () => {
   it("repairs a failing consistency review by regenerating downstream stages with injected issues", async () => {
     const base = createStageResponses();
     const responses = [
-      ...base.slice(0, 9),
+      ...base.slice(0, 11),
       {
         schemaVersion: "book-initialization-review.v1",
         passed: false,
         issues: [{ severity: "blocking", message: "卷纲与时间线骨架冲突：激活事件重复" }],
         summary: "存在阻断冲突"
       },
-      ...base.slice(3, 9),
-      base[9]
+      ...base.slice(3, 12)
     ];
     const { prompts } = await runInitializationWithResponses(responses);
 
-    expect(prompts).toHaveLength(17);
-    expect(prompts[16]).toContain("【上一轮一致性审查未通过的问题");
-    expect(prompts[16]).toContain("卷纲与时间线骨架冲突");
+    expect(prompts).toHaveLength(21);
+    expect(prompts[20]).toContain("【上一轮校验未通过的问题");
+    expect(prompts[20]).toContain("卷纲与时间线骨架冲突");
   });
 
   it("rejects when an entity requirement schedules an event already fixed in the story backbone", async () => {
@@ -241,6 +271,47 @@ describe("initializeBookWithAi", () => {
     await expect(runInitializationWithResponses(responses)).rejects.toThrow(/firstUse 与时间线骨架/);
   });
 
+  it("repairs a hallucinated entity reference by regenerating only the affected stage", async () => {
+    const base = createStageResponses();
+    const badInitialState = structuredClone(base[8]) as { itemStates: Array<{ itemId: string }> };
+    badInitialState.itemStates[0].itemId = "chen-error-notebook";
+    // 定向修复：物品状态引用问题只重生成 initial_state（index 8），
+    // 骨架/卷纲/实体等未受损阶段不重生成，随后仅重跑三次聚焦审查。
+    const responses = [
+      ...base.slice(0, 8),
+      badInitialState,
+      base[8],
+      ...base.slice(9, 12)
+    ];
+    const { prompts } = await runInitializationWithResponses(responses);
+
+    expect(prompts).toHaveLength(13);
+    expect(prompts[12]).toContain("【上一轮校验未通过的问题");
+    expect(prompts[12]).toContain("物品状态引用不存在：chen-error-notebook");
+  });
+
+  it("fails with aggregated reference issues when repair rounds cannot fix them", async () => {
+    const base = createStageResponses();
+    const badInitialState = structuredClone(base[8]) as { itemStates: Array<{ itemId: string }> };
+    badInitialState.itemStates[0].itemId = "chen-error-notebook";
+    const responses = [
+      ...base.slice(0, 8),
+      badInitialState,
+      structuredClone(badInitialState),
+      structuredClone(badInitialState)
+    ];
+
+    await expect(runInitializationWithResponses(responses)).rejects.toThrow(/物品状态引用不存在：chen-error-notebook/);
+  });
+
+  it("injects the referenceable entity ID whitelist into the initial state prompt", async () => {
+    const { prompts } = await runInitializationWithResponses(createStageResponses());
+
+    expect(prompts[8]).toContain("【可引用实体 ID");
+    expect(prompts[8]).toContain("[moon-key] 月钥（物品）");
+    expect(prompts[8]).toContain("[old-tower] 旧塔（地点）");
+  });
+
   it("persists fact cards into the book directory after a successful initialization", async () => {
     const { paths, bookId } = await runInitializationWithResponses(createStageResponses());
 
@@ -250,7 +321,15 @@ describe("initializeBookWithAi", () => {
     expect(byId.get("fact:world-rule-1")?.content).toContain("月潮");
     expect(byId.get("fact:world-rule-1")?.mutability).toBe("immutable");
     expect(byId.get("fact:foundation-boundary-1")?.kind).toBe("rule");
-    expect(byId.get("fact:backbone-start-1")?.content).toContain("姐姐失踪");
+    // 骨架事实卡保留原始事件 id，伏笔文本中的 st-/ke- 引用在 facts.json 中可解析
+    expect(byId.get("fact:backbone-sister-missing")?.content).toContain("姐姐失踪");
+    expect(byId.get("fact:backbone-key-old-tower")?.content).toContain("进入旧塔");
+    // 补充实体 / 物品 / 初始状态也必须进入事实卡，补齐跨阶段事实传播的空洞
+    expect(byId.get("fact:entity-old-tower")?.kind).toBe("entity");
+    expect(byId.get("fact:entity-old-tower")?.content).toContain("旧塔");
+    expect(byId.get("fact:entity-guide-su")?.content).toContain("苏引");
+    expect(byId.get("fact:entity-moon-key")?.content).toContain("月钥");
+    expect(byId.get("fact:state-hero-lin")?.content).toContain("尚不知道姐姐进入旧塔");
     expect(byId.get("fact:summary-mainline")?.content).toContain("林夕追查姐姐失踪");
     expect(byId.get("fact:summary-story-start")?.content).toContain("空白档案");
     expect(byId.get("fact:summary-timeline")?.content).toContain("既成事实");
@@ -294,11 +373,14 @@ async function runInitializationWithResponses(responses: unknown[]) {
     setStage() {},
     emitProgress() {},
     emitDelta() {},
-    saveArtifact(artifactType) {
+    // 内存工件缓存：让定向修复轮从检查点恢复未受损阶段（与生产行为一致）
+    saveArtifact(artifactType, value) {
+      artifactStore.set(artifactType, { value });
       return { id: `artifact-${artifactType}`, contentHash: "hash" };
     },
-    loadArtifact() {
-      return null;
+    loadArtifact(artifactType) {
+      const stored = artifactStore.get(artifactType);
+      return stored ? { id: `artifact-${artifactType}`, contentHash: "hash", value: stored.value } : null;
     },
     saveCheckpoint(stage) {
       return { id: `checkpoint-${stage}` };
@@ -306,6 +388,7 @@ async function runInitializationWithResponses(responses: unknown[]) {
     markCommitted() {}
   };
   const prompts: string[] = [];
+  const artifactStore = new Map<string, { value: unknown }>();
   await initializeBookWithAi(paths, context, {
     planningModel: fakeModel,
     reviewModel: fakeModel,
@@ -329,6 +412,7 @@ const fakeModel: ModelConfigRecord = {
   enabled: true,
   isDefault: true,
   capabilities: {},
+  thinking: null,
   note: "",
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z"
@@ -410,8 +494,7 @@ function createStageResponses(): unknown[] {
         turningPoint: "秦昼发现档案被篡改",
         climax: "林夕进入月潮中心",
         resolution: "二人暂时合作",
-        characterChanges: ["林夕接受向他人求助"],
-        foreshadowing: ["月钥能开启旧塔核心"]
+        characterChanges: ["林夕接受向他人求助"]
       }]
     },
     {
@@ -440,13 +523,26 @@ function createStageResponses(): unknown[] {
       characterStates: [{ characterId: "hero-lin", state: "尚不知道姐姐进入旧塔" }],
       factionStates: [{ factionId: "night-watch", state: "正在回收失窃档案" }],
       itemStates: [{ itemId: "moon-key", state: "藏在空白档案夹层" }],
-      foreshadowing: [{ id: "memory-price", content: "林夕忘记童年歌谣的一句", relatedEntityIds: ["hero-lin", "moon-key"], placement: "第五章首次使用月钥后", resolution: "终卷揭示记忆代价", status: "planned" }]
+      // 伏笔池须标注投放卷（长线覆盖校验要求）并保持投放早于回收
+      foreshadowing: [{ id: "memory-price", content: "林夕忘记童年歌谣的一句", relatedEntityIds: ["hero-lin", "moon-key"], placement: "第一卷第五章首次使用月钥后", resolution: "终卷揭示记忆代价", status: "planned" }]
     },
     {
       schemaVersion: "book-initialization-review.v1",
       passed: true,
       issues: [],
-      summary: "实体引用、锁定事实和时间顺序均一致"
+      summary: "实体描述与初始状态一致，无既成事实冲突"
+    },
+    {
+      schemaVersion: "book-initialization-review.v1",
+      passed: true,
+      issues: [],
+      summary: "骨架、卷纲与初始状态的数字和事件引用一致"
+    },
+    {
+      schemaVersion: "book-initialization-review.v1",
+      passed: true,
+      issues: [],
+      summary: "未发现锁定设定、边界承诺或因果矛盾"
     }
   ];
 }

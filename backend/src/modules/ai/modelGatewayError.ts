@@ -52,23 +52,28 @@ export class ModelGatewayError extends Error {
  * 把 HTTP 状态码归类为网关错误。
  * 4xx 前段为认证失败、中段为请求无效（均不可重试）；408/504 超时、429 限流、5xx 不可用（均可重试）。
  */
-export function createHttpModelGatewayError(status: number) {
+/**
+ * 按 HTTP 状态码分类为网关错误；detail 为供应商返回的具体原因（已脱敏截断）。
+ * 示例：503 + "服务繁忙，请稍后重试" → "模型服务暂时不可用：服务繁忙，请稍后重试（HTTP 503）"
+ */
+export function createHttpModelGatewayError(status: number, detail?: string) {
+  let kind: ModelGatewayErrorKind;
   if (status === 401 || status === 403) {
-    return new ModelGatewayError({ kind: "auth", retryable: false, status });
+    kind = "auth";
+  } else if (status === 408 || status === 504) {
+    kind = "timeout";
+  } else if (status === 429) {
+    kind = "rate_limited";
+  } else if (status >= 500) {
+    kind = "unavailable";
+  } else if (status >= 400) {
+    kind = "invalid_request";
+  } else {
+    kind = "unknown";
   }
-  if (status === 408 || status === 504) {
-    return new ModelGatewayError({ kind: "timeout", retryable: true, status });
-  }
-  if (status === 429) {
-    return new ModelGatewayError({ kind: "rate_limited", retryable: true, status });
-  }
-  if (status >= 500) {
-    return new ModelGatewayError({ kind: "unavailable", retryable: true, status });
-  }
-  if (status >= 400) {
-    return new ModelGatewayError({ kind: "invalid_request", retryable: false, status });
-  }
-  return new ModelGatewayError({ kind: "unknown", retryable: false, status });
+  const message = detail ? `${publicMessages[kind]}：${detail}` : publicMessages[kind];
+  const retryable = status === 408 || status === 429 || status === 504 || status >= 500;
+  return new ModelGatewayError({ kind, retryable, status, message });
 }
 
 /** 模型返回了无法解析的响应：视为可重试（可能为瞬时损坏）。 */
@@ -99,7 +104,9 @@ export function normalizeModelGatewayError(error: unknown, externalSignal?: Abor
     return new ModelGatewayError({ kind: "cancelled", retryable: false, cause: error });
   }
   if (error instanceof TypeError) {
-    return new ModelGatewayError({ kind: "unavailable", retryable: true, cause: error });
+    // 网络层错误（fetch failed / ECONNREFUSED 等）：把底层原因附进提示，便于排查
+    const causeMessage = error.message ? `（${error.message.slice(0, 200)}）` : "";
+    return new ModelGatewayError({ kind: "unavailable", retryable: true, message: `${publicMessages.unavailable}${causeMessage}`, cause: error });
   }
   return new ModelGatewayError({ kind: "unknown", retryable: false, cause: error });
 }

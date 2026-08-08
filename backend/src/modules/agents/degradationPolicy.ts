@@ -5,7 +5,8 @@ export type DegradationCode =
   | "SCENE_CLASSIFIER_FALLBACK"
   | "SEMANTIC_REVIEW_UNAVAILABLE"
   | "LOCAL_REVIEW_UNAVAILABLE"
-  | "REVISION_FAILED";
+  | "REVISION_FAILED"
+  | "CHAPTER_OUTLINE_UNAVAILABLE";
 
 /** 单条降级说明：原因码 + 面向用户的中文描述 + 是否可恢复（软降级）。 */
 export interface DegradationReason {

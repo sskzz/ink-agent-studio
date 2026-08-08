@@ -80,8 +80,15 @@ function withApiModelAlias(value: unknown) {
 }
 
 /**
- * 模型配置记录结构（读取落盘 JSON 用），先经 withApiModelAlias 预处理。
+ * 思考模式配置（DeepSeek V4）：enabled 控制思考模式开关，effort 控制推理强度。
+ * effort 为 null 表示不发送该参数（使用服务商默认档位）。
  */
+export const modelThinkingConfigSchema = z.object({
+  enabled: z.boolean(),
+  effort: z.enum(["low", "high", "max"]).nullable()
+}).strict();
+
+/** 模型配置记录结构（读取落盘 JSON 用），先经 withApiModelAlias 预处理。 */
 const modelConfigRecordFieldsSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -92,6 +99,7 @@ const modelConfigRecordFieldsSchema = z.object({
   enabled: z.boolean(),
   isDefault: z.boolean(),
   capabilities: modelCapabilitiesSchema,
+  thinking: modelThinkingConfigSchema.nullable().default(null),
   note: z.string(),
   createdAt: z.string(),
   updatedAt: z.string()
@@ -122,6 +130,7 @@ const modelConfigUpsertFieldsSchema = z.object({
   enabled: z.boolean().default(true),
   isDefault: z.boolean().default(false),
   capabilities: modelCapabilitiesSchema.optional(),
+  thinking: modelThinkingConfigSchema.nullable().default(null),
   note: z.string().optional().default("")
 });
 type ModelConfigUpsertOutput = z.infer<typeof modelConfigUpsertFieldsSchema>;

@@ -3207,6 +3207,7 @@ body::after {
   margin: 0;
   padding: 0;
   overflow: auto;
+  overflow-anchor: none;
   list-style: none;
 }
 
@@ -3255,6 +3256,7 @@ body::after {
   max-height: 180px;
   padding: 8px 10px;
   overflow: auto;
+  overflow-anchor: none;
   border: 1px solid #dbeafe;
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.66);
@@ -3355,6 +3357,7 @@ body::after {
 .book-detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: 16px;
   min-width: 0;
 }
@@ -3637,6 +3640,43 @@ body::after {
   width: 100%;
   border: 0;
   border-top: 1px solid rgba(14, 116, 144, 0.16);
+}
+
+.markdown-table-wrap {
+  overflow-x: auto;
+  border: 1px solid rgba(14, 116, 144, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.markdown-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.markdown-preview th,
+.markdown-preview td {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(14, 116, 144, 0.12);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-preview thead th {
+  background: rgba(224, 242, 254, 0.55);
+  color: #0f5d6b;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.markdown-preview tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.markdown-preview tbody tr:hover {
+  background: rgba(224, 242, 254, 0.28);
 }
 
 @keyframes modal-backdrop-enter {
@@ -4850,41 +4890,41 @@ body::before {
 
 .novel-editor-frame {
   display: grid;
-  grid-template-columns: 250px minmax(520px, 1fr) 34px 350px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
+  gap: 12px;
+  padding: 12px;
   height: 100%;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
   background: #eef3f8;
-  transition: grid-template-columns 220ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.novel-editor-page.assistant-collapsed .novel-editor-frame {
-  grid-template-columns: 250px minmax(520px, 1fr) 0 0;
 }
 
 .novel-editor-left {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) minmax(0, 0.85fr);
   height: 100%;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  border-right: 1px solid #e6ebf1;
+  border: 1px solid #e4eaf1;
+  border-radius: 12px;
   background: #ffffff;
+  box-shadow: 0 10px 26px rgb(30 41 59 / 0.055);
 }
 
 .novel-editor-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  min-height: 54px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-height: 50px;
+  padding: 8px 8px 0;
   border-bottom: 1px solid #eef2f7;
-  background: #f8fafc;
+  background: #ffffff;
 }
 
 .novel-editor-tabs button {
   border: 0;
-  border-radius: 0 0 16px 16px;
+  border-radius: 10px 10px 0 0;
   background: transparent;
   color: #64748b;
   font-size: 13px;
@@ -4895,9 +4935,8 @@ body::before {
 }
 
 .novel-editor-tabs button.active {
-  background: #ffffff;
-  color: #172033;
-  box-shadow: 0 12px 24px rgb(30 41 59 / 0.04);
+  background: #eef6ff;
+  color: #347fcf;
 }
 
 .novel-editor-nav-scroll {
@@ -4905,8 +4944,8 @@ body::before {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 14px 12px 28px;
-  scroll-padding-bottom: 28px;
+  padding: 12px 10px 20px;
+  scroll-padding-bottom: 20px;
   scrollbar-gutter: stable;
 }
 
@@ -4988,44 +5027,216 @@ body::before {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  flex: 1;
   min-width: 0;
   font-weight: 650;
+  overflow-wrap: anywhere;
 }
 
 .novel-editor-nav-list button small {
+  flex-shrink: 0;
+  max-width: 140px;
+  overflow: hidden;
   color: #8a96a8;
   font-size: 11px;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* 故事线看板（左侧功能栏底部）：主体/阶段进度、当前位置、短期伏笔与角色状态 */
+.novel-storyline {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  border-top: 1px solid #eef2f7;
+  background: #f8fafc;
+}
+
+.novel-storyline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  padding: 0 16px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.novel-storyline-head strong {
+  color: #172033;
+  font-size: 13px;
+  font-weight: 780;
+}
+
+.novel-storyline-head button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #8a96a8;
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.novel-storyline-head button:hover {
+  background: #eefcf6;
+  color: #0f766e;
+  transform: rotate(120deg);
+}
+
+.novel-storyline-scroll {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 10px 20px;
+}
+
+.novel-storyline-section + .novel-storyline-section {
+  margin-top: 14px;
+}
+
+.novel-storyline-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #475569;
+}
+
+.novel-storyline-group-head span {
+  display: grid;
+  place-items: center;
+}
+
+.novel-storyline-group-head svg {
+  color: #64748b;
+}
+
+.novel-storyline-group-head strong {
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.novel-storyline-group-body {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.novel-storyline-line {
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.novel-storyline-line strong {
+  color: #0f766e;
+  font-weight: 700;
+}
+
+.novel-storyline-line em {
+  color: #8a96a8;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.novel-storyline-line.muted {
+  color: #94a3b8;
+}
+
+.novel-storyline-badge {
+  display: inline-block;
+  margin: 0 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 18px;
+}
+
+.novel-storyline-badge.planned {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.novel-storyline-badge.planted {
+  background: #ecfdf5;
+  color: #0f766e;
+}
+
+.novel-storyline-badge.resolving {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.novel-storyline-badge.resolved {
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.novel-storyline-error {
+  margin: 10px 16px 0;
+  color: #dc2626;
+  font-size: 12px;
+}
+
+.novel-storyline-empty {
+  margin: 12px 16px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
 .novel-editor-center {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 340px;
   height: 100%;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  padding: 14px 46px 24px;
+  border: 1px solid #e4eaf1;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 10px 26px rgb(30 41 59 / 0.055);
+}
+
+.novel-editor-workspace {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.novel-editor-chat {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  border-top: 1px solid #eef2f7;
+  background: #ffffff;
 }
 
 .novel-editor-card {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  width: min(100%, 980px);
+  width: 100%;
   height: 100%;
   min-height: 0;
-  margin: 0 auto;
   overflow: hidden;
-  border: 1px solid #e4eaf1;
-  border-radius: 12px;
+  border: 0;
+  border-radius: 0;
   background: #ffffff;
-  box-shadow: 0 10px 26px rgb(30 41 59 / 0.035);
 }
 
 .novel-editor-card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 56px;
-  padding: 0 24px;
+  min-height: 50px;
+  padding: 0 18px;
   border-bottom: 1px solid #eef2f7;
 }
 
@@ -5045,7 +5256,7 @@ body::before {
 .novel-editor-card-body {
   min-height: 0;
   overflow: auto;
-  padding: 32px 56px;
+  padding: 24px 24px;
 }
 
 .novel-editor-card-body.empty,
@@ -5104,6 +5315,7 @@ body::before {
   font-size: 13px;
   font-weight: 680;
   line-height: 1.65;
+  overflow-wrap: anywhere;
 }
 
 .novel-editor-field-grid small {
@@ -5286,103 +5498,450 @@ body::before {
   box-shadow: 0 0 0 4px rgb(16 168 117 / 0.08);
 }
 
-.novel-assistant-toggle {
-  align-self: center;
-  justify-self: center;
-  z-index: 2;
+/* ===== 章节编辑面板 ===== */
+
+.chapter-editor {
   display: grid;
-  place-items: center;
-  width: 28px;
-  min-height: 42px;
-  padding: 0;
-  border: 1px solid #e2e8f0;
+  gap: 14px;
+}
+
+/* 空态 / 加载态 */
+.chapter-editor-empty {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  max-width: 460px;
+  color: #8a96a8;
+  line-height: 1.8;
+}
+
+.chapter-editor-empty strong {
+  color: #334155;
+  font-size: 14px;
+}
+
+/* 工具栏：只读标题 + 状态徽章 + 卷/章/字数 */
+.chapter-editor-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chapter-editor-title {
+  flex: 1;
+  min-width: 220px;
+  margin: 0;
+  color: #172033;
+  font-size: 18px;
+  font-weight: 760;
+  overflow-wrap: anywhere;
+}
+
+.chapter-editor-status {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chapter-editor-status[data-status="drafting"] {
+  background: #eefcf6;
+  color: #0f766e;
+}
+
+.chapter-editor-status[data-status="reviewed"] {
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.chapter-editor-status[data-status="published"] {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.chapter-editor-meta {
+  color: #8a96a8;
+  font-size: 12px;
+}
+
+/* 删除章节（危险操作） */
+.chapter-editor-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border: 1px solid #fecdd3;
+  border-radius: 8px;
+  background: #fff5f5;
+  color: #be123c;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.chapter-editor-delete:hover:not(:disabled) {
+  border-color: #fca5a5;
+  background: #fee2e2;
+}
+
+.chapter-editor-delete:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 面板内联错误条：续写/保存/删除失败时醒目展示 */
+.chapter-editor-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  background: #fff5f5;
+  color: #b91c1c;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.chapter-editor-error svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* AI 生成区按钮行：续写 + 重新生成整章 */
+.chapter-editor-generate-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chapter-editor-generate-actions .primary-button {
+  justify-self: start;
+}
+
+/* 重写建议输入：完全重写时告知 AI 哪里不合适 */
+.chapter-editor-rewrite-suggestion {
+  display: grid;
+  gap: 5px;
+}
+
+.chapter-editor-rewrite-suggestion > span {
+  color: #8a96a8;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.chapter-editor-rewrite-suggestion textarea {
+  min-height: 52px;
+  padding: 8px 10px;
+  border: 1px solid #e6ebf1;
   border-radius: 10px;
   background: #ffffff;
-  box-shadow: 0 8px 18px rgb(30 41 59 / 0.08);
-  color: #64748b;
-  transition:
-    background 160ms ease,
-    border-color 160ms ease,
-    color 160ms ease,
-    transform 160ms ease;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.6;
+  outline: none;
+  resize: vertical;
 }
 
-.novel-assistant-toggle:hover {
-  border-color: #b7e4d3;
-  background: #f7fffb;
-  color: #10a875;
-  transform: translateX(-1px);
-}
-
-.novel-assistant-toggle svg {
-  stroke-width: 2.4;
-}
-
-.novel-assistant-panel {
+/* 实时生成流：SSE model_delta 累积展示 */
+.chapter-editor-stream {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  height: 100%;
-  min-height: 0;
-  min-width: 0;
-  overflow: hidden;
-  border-left: 1px solid #e6ebf1;
-  background: #ffffff;
-  transition:
-    opacity 180ms ease,
-    transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  gap: 6px;
 }
 
-.novel-editor-page.assistant-collapsed .novel-assistant-panel {
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(20px);
+.chapter-editor-stream-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
-.novel-editor-page.assistant-collapsed .novel-assistant-toggle {
-  position: fixed;
-  top: 50%;
-  right: 0;
-  border-right: 0;
-  border-radius: 12px 0 0 12px;
-  transform: translateY(-50%);
+.chapter-editor-stream-head strong {
+  color: #0f766e;
+  font-size: 12px;
 }
 
-.novel-editor-page.assistant-collapsed .novel-assistant-toggle:hover {
-  transform: translateY(-50%) translateX(-2px);
-}
-
-.novel-assistant-tabs {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  min-height: 56px;
-  border-bottom: 1px solid #eef2f7;
-  background: #f7f9fc;
-}
-
-.novel-assistant-tabs button {
-  position: relative;
-  border: 0;
-  background: transparent;
+.chapter-editor-stream-head span {
   color: #8a96a8;
+  font-size: 11px;
+}
+
+.chapter-editor-stream pre {
+  max-height: 260px;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border: 1px solid #cdeee2;
+  border-radius: 10px;
+  background: #f7fffb;
+  color: #334155;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 只读分区：细纲与正文 */
+.chapter-editor-section {
+  display: grid;
+  gap: 6px;
+}
+
+.chapter-editor-section h4 {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chapter-editor-readonly-text {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid #e6ebf1;
+  border-radius: 10px;
+  background: #fcfdff;
+  color: #334155;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chapter-editor-readonly-content {
+  max-height: 520px;
+  overflow: auto;
+  padding: 16px 18px;
+  border: 1px solid #e6ebf1;
+  border-radius: 12px;
+  background: #fcfdff;
+}
+
+.chapter-editor-readonly-content pre {
+  margin: 0;
+  color: #172033;
+  font-family: inherit;
   font-size: 14px;
-  font-weight: 760;
+  line-height: 1.95;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-.novel-assistant-tabs button.active {
-  border-radius: 0 0 18px 18px;
+.chapter-editor-readonly-empty {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px dashed #e6ebf1;
+  border-radius: 10px;
+  color: #a0aaba;
+  font-size: 13px;
+}
+
+/* AI 续写指令区 */
+.chapter-editor-continue {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 14px;
+  border: 1px dashed #cdeee2;
+  border-radius: 14px;
+  background: #f7fffb;
+}
+
+.chapter-editor-continue > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chapter-editor-continue textarea {
+  min-height: 64px;
+  padding: 10px 12px;
+  border: 1px solid #e1f0ea;
+  border-radius: 10px;
   background: #ffffff;
-  color: #111827;
+  color: #334155;
+  line-height: 1.7;
+  outline: none;
+  resize: vertical;
 }
 
-.novel-assistant-tabs button.active::before {
-  position: absolute;
-  top: 9px;
-  left: 18px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #ff5f45;
-  content: "";
+.chapter-editor-continue .primary-button {
+  justify-self: start;
+}
+
+/* 会话发送错误条 */
+.novel-assistant-send-error {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  background: #fff5f5;
+  color: #b91c1c;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.novel-assistant-send-error strong {
+  font-size: 12px;
+}
+
+.novel-assistant-send-error small {
+  color: #9f3a48;
+}
+
+/* 续写结果面板：草稿 + 降级原因 + 采纳/放弃 */
+.chapter-continue-result {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #f8fbff;
+}
+
+.chapter-continue-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chapter-continue-result-head strong {
+  color: #1e3a5f;
+  font-size: 13px;
+}
+
+.chapter-continue-result-head > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #8a96a8;
+  font-size: 11px;
+}
+
+.chapter-continue-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #b45309;
+}
+
+.chapter-continue-reasons {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: #b45309;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.chapter-continue-draft {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid #e6ebf1;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.chapter-continue-draft pre {
+  margin: 0;
+  padding: 14px 16px;
+  color: #334155;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.9;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chapter-continue-actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* ===== 通用确认弹窗（项目样式，替代浏览器原生 confirm） ===== */
+
+.confirm-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(125, 211, 252, 0.16), transparent 24rem),
+    rgba(8, 20, 32, 0.3);
+  backdrop-filter: blur(12px);
+  animation: modal-backdrop-enter 160ms ease both;
+}
+
+.confirm-dialog {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 14px;
+  width: min(420px, 100%);
+  padding: 22px;
+  border: 1px solid #e4eaf1;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.92)),
+    #ffffff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 28px 70px rgba(15, 23, 42, 0.2);
+  animation: modal-enter 160ms ease both;
+}
+
+.confirm-dialog-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.confirm-dialog-body h3 {
+  margin: 0 0 6px;
+  color: #0f172a;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 720;
+  letter-spacing: -0.012em;
+}
+
+.confirm-dialog-body p {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.confirm-dialog-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
 }
 
 .novel-assistant-chat {
@@ -5394,12 +5953,76 @@ body::before {
 .novel-assistant-tools {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 14px;
   min-height: 44px;
   padding: 0 20px;
   border-bottom: 1px solid #eef2f7;
   color: #9aa6b6;
+}
+
+/* 工具条左侧：当前对话绑定的左侧条目名称（超长时省略） */
+.novel-assistant-binding {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 绑定状态：标注是否已载入条目内容作为对话上下文 */
+.novel-assistant-binding-state {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #eefcf6;
+  color: #0f766e;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 680;
+}
+
+/* 消息上下文徽章：标注该消息基于哪个左侧条目 */
+.novel-assistant-context-badge {
+  margin-left: 8px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 680;
+  white-space: nowrap;
+}
+
+/* 工具条右侧：清空当前条目专属会话 */
+.novel-assistant-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 4px 9px;
+  border: 1px solid #e6ebf1;
+  border-radius: 8px;
+  background: #fbfdff;
+  color: #8a96a8;
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.novel-assistant-clear:hover {
+  border-color: #fecaca;
+  background: #fff5f5;
+  color: #b91c1c;
 }
 
 .novel-assistant-messages {
@@ -5439,6 +6062,24 @@ body::before {
   color: #a0aaba;
 }
 
+/* 用户消息：头像移到右侧、内容右对齐，与助手消息形成左右呼应 */
+.novel-assistant-message.user {
+  grid-template-columns: minmax(0, 1fr) 28px;
+}
+
+.novel-assistant-message.user .novel-assistant-avatar {
+  grid-column: 2;
+  grid-row: 1;
+  background: #e8f0ff;
+  color: #2563eb;
+}
+
+.novel-assistant-message.user > div:last-child {
+  grid-column: 1;
+  grid-row: 1;
+  text-align: right;
+}
+
 .novel-assistant-input {
   margin: 0 14px 16px;
   padding: 12px;
@@ -5473,73 +6114,14 @@ body::before {
   resize: none;
 }
 
-.novel-inspiration-panel {
-  min-height: 0;
-  overflow: auto;
-}
-
-.novel-inspiration-filter {
-  display: flex;
-  gap: 8px;
-  padding: 12px 16px;
-  border-bottom: 1px solid #eef2f7;
-}
-
-.novel-inspiration-filter button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 28px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: #f6f8fb;
-  color: #64748b;
-  font-size: 12px;
-}
-
-.novel-inspiration-filter button.active {
-  background: #e8fbf3;
-  color: #0f766e;
-}
-
-.novel-inspiration-list {
-  display: grid;
-  gap: 18px;
-  padding: 28px 16px;
-}
-
-.novel-inspiration-card {
-  display: grid;
-  gap: 8px;
-  padding: 14px;
-  border: 1px solid #e6ebf1;
-  border-radius: 14px;
-  background: #ffffff;
-  box-shadow: 0 8px 18px rgb(30 41 59 / 0.08);
-}
-
-.novel-inspiration-card div {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #334155;
-}
-
-.novel-inspiration-card p {
-  margin: 0;
-  color: #64748b;
-  line-height: 1.7;
-}
-
 @media (max-width: 1180px) {
   .novel-editor-page {
     grid-template-rows: auto auto;
     overflow-y: auto;
   }
 
-  .novel-editor-frame,
-  .novel-editor-page.assistant-collapsed .novel-editor-frame {
-    grid-template-columns: 220px minmax(0, 1fr);
+  .novel-editor-frame {
+    grid-template-columns: minmax(200px, 1fr) minmax(0, 3fr);
     height: auto;
     min-height: 0;
     overflow: visible;
@@ -5549,25 +6131,10 @@ body::before {
     height: min(70dvh, 700px);
   }
 
-  .novel-assistant-toggle,
-  .novel-assistant-panel {
-    grid-column: 1 / -1;
-  }
-
-  .novel-editor-page.assistant-collapsed .novel-assistant-panel {
-    display: none;
-  }
-
-  .novel-assistant-panel {
-    min-height: 420px;
-    border-left: 0;
-    border-top: 1px solid #e6ebf1;
-  }
-
   .novel-editor-center {
+    grid-template-rows: minmax(620px, auto) 340px;
     height: auto;
     overflow: visible;
-    padding: 14px 18px 22px;
   }
 
   .novel-editor-card {
@@ -5604,35 +6171,32 @@ body::before {
     white-space: normal;
   }
 
-  .novel-editor-frame,
-  .novel-editor-page.assistant-collapsed .novel-editor-frame {
+  .novel-editor-frame {
     grid-template-columns: minmax(0, 1fr);
     min-height: auto;
   }
 
   .novel-editor-left {
     max-height: 430px;
-    border-right: 0;
-    border-bottom: 1px solid #e6ebf1;
+    border: 1px solid #e4eaf1;
   }
 
   .novel-editor-center {
-    padding: 12px;
+    grid-template-rows: minmax(520px, auto) 320px;
   }
 
   .novel-editor-card {
     height: auto;
     min-height: 520px;
-    border-radius: 14px;
   }
 
   .novel-editor-card-head {
     min-height: auto;
-    padding: 14px;
+    padding: 12px 14px;
   }
 
   .novel-editor-card-body {
-    padding: 18px 14px;
+    padding: 16px 14px;
   }
 
   .novel-editor-field-grid {
@@ -5641,19 +6205,6 @@ body::before {
 
   .novel-role-card-grid {
     grid-template-columns: 1fr;
-  }
-
-  .novel-assistant-toggle {
-    width: fit-content;
-    min-height: 34px;
-    margin: 8px 12px;
-    padding: 0 12px;
-  }
-
-  .novel-assistant-panel {
-    margin: 0 12px 12px;
-    border: 1px solid #e6ebf1;
-    border-radius: 14px;
   }
 }
 

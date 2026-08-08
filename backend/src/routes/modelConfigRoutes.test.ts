@@ -26,6 +26,45 @@ afterEach(async () => {
 });
 
 describe("model configuration routes", () => {
+  it("persists DeepSeek thinking mode configuration on save and read-back", async () => {
+    const app = createApp();
+    let response = await app.request("/api/v1/model-configs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "DeepSeek planner",
+        provider: "deepseek",
+        baseUrl: "https://api.deepseek.com",
+        apiModel: "deepseek-v4-flash",
+        purpose: "planning",
+        thinking: { enabled: true, effort: "max" }
+      })
+    });
+    const created = (await response.json()) as ApiPayload<{ id: string }>;
+    const createdId = created.data.id;
+
+    response = await app.request(`/api/v1/model-configs/${createdId}`);
+    const detail = (await response.json()) as ApiPayload<{ thinking: { enabled: boolean; effort: string } }>;
+    expect(detail.data.thinking).toEqual({ enabled: true, effort: "max" });
+  });
+
+  it("defaults missing thinking configuration to null for compatibility", async () => {
+    const app = createApp();
+    const response = await app.request("/api/v1/model-configs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Legacy model",
+        provider: "openai-compatible",
+        baseUrl: "https://models.example/v1",
+        apiModel: "legacy-chat",
+        purpose: "writing"
+      })
+    });
+    const payload = (await response.json()) as ApiPayload<{ thinking: unknown }>;
+    expect(payload.data.thinking).toBeNull();
+  });
+
   it("treats an enabled assigned model as route-ready regardless of its purpose label", async () => {
     const app = createApp();
     let response = await app.request("/api/v1/model-configs", {

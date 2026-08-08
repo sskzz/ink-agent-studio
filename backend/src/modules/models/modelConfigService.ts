@@ -102,6 +102,7 @@ export async function testPublicModelConnection(paths: WorkspacePaths, body: unk
     enabled: input.enabled,
     isDefault: input.isDefault,
     capabilities: input.capabilities ?? {},
+    thinking: input.thinking ?? null,
     note: input.note ?? "",
     createdAt: now,
     updatedAt: now
@@ -128,6 +129,7 @@ export async function discoverPublicModels(paths: WorkspacePaths, body: unknown)
     enabled: existing?.enabled ?? true,
     isDefault: existing?.isDefault ?? false,
     capabilities: existing?.capabilities ?? {},
+    thinking: existing?.thinking ?? null,
     note: existing?.note ?? "",
     createdAt: existing?.createdAt ?? now,
     updatedAt: now

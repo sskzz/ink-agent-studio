@@ -61,6 +61,7 @@ function model(id: string, baseUrl: string, capabilities: Record<string, unknown
     enabled: true,
     isDefault: false,
     capabilities,
+    thinking: null,
     note: "",
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString()
@@ -319,6 +320,73 @@ describe("resilient model gateway", () => {
       tokenUsage: { promptTokens: 12, completionTokens: 4, totalTokens: 16 },
       raw: { stream: true, chunkCount: 3 }
     });
+  });
+
+  it("persists model_delta events incrementally BEFORE the stream completes", async () => {
+    const fixture = await createFixture();
+    const chunks = ["你", "好", "世界", "，", "这", "是", "实", "时", "增", "量"];
+    const baseUrl = await listen((_request, response) => {
+      response.statusCode = 200;
+      response.setHeader("Content-Type", "text/event-stream");
+      response.setHeader("Cache-Control", "no-cache");
+      response.flushHeaders();
+      void (async () => {
+        // 每块间隔 100ms，总时长约 1s，大于网关 400ms 的合并窗口，确保中途有增量落库
+        for (const chunk of chunks) {
+          response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: chunk, role: "assistant" } }] })}\n\n`);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        response.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 20, completion_tokens: 12, total_tokens: 32 } })}\n\n`);
+        response.write("data: [DONE]\n\n");
+        response.end();
+      })().catch(() => response.destroy());
+    });
+
+    const startedAt = Date.now();
+    let completedAt = 0;
+    await runWithModelExecutionContext({
+      runId: fixture.runId,
+      stage: "generate",
+      signal: new AbortController().signal,
+      eventStore: fixture.eventStore,
+      modelPolicy: policy()
+    }, async () => {
+      const result = await generateModelTextWithFallback(fixture.paths, model("streaming", baseUrl), {
+        systemPrompt: "system",
+        userPrompt: "user",
+        stream: true,
+        timeoutMs: 5_000
+      }, {
+        fallbackModels: [],
+        retry: policy().retry,
+        random: () => 0.5
+      });
+      completedAt = Date.now() - startedAt;
+      return result;
+    });
+
+    const deltaEvents = fixture.eventStore.listEvents(fixture.runId)
+      .filter((event) => event.type === "model_delta");
+    expect(deltaEvents.length).toBeGreaterThanOrEqual(2);
+    expect(deltaEvents.map((event) => (event.payload as { delta: string }).delta).join("")).toBe(chunks.join(""));
+    // 第一条增量必须在整段响应结束前落库（增量实时性证据）
+    const firstDeltaAt = Date.parse(deltaEvents[0].timestamp) - startedAt;
+    expect(firstDeltaAt).toBeLessThan(completedAt - 100);
+  });
+
+  it("reports provider error detail and status for unavailable responses", async () => {
+    const fixture = await createFixture();
+    const baseUrl = await listen((_request, response) => {
+      response.statusCode = 503;
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ error: { message: "余额不足或配额耗尽" } }));
+    });
+    await expect(execute(fixture, model("primary", baseUrl), [], new AbortController(), {}))
+      .rejects.toMatchObject({
+        kind: "unavailable",
+        status: 503,
+        message: expect.stringContaining("余额不足或配额耗尽")
+      });
   });
 
   it("cancels an in-progress retry backoff before another HTTP attempt starts", async () => {

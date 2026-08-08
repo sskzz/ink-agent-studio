@@ -82,6 +82,7 @@ export async function saveModelConfig(paths: WorkspacePaths, input: ModelConfigU
     enabled: input.enabled,
     isDefault: input.isDefault,
     capabilities: input.capabilities ?? existing?.capabilities ?? {},
+    thinking: input.thinking ?? existing?.thinking ?? null,
     note: input.note,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now

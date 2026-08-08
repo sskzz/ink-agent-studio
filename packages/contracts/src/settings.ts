@@ -54,6 +54,9 @@ export const appConfigSectionsSchema = z.object({
     defaultMaxOutputTokens: z.number().int().min(256),
     safetyMarginRatio: z.number().min(0.01).max(0.5), // 预留安全余量占比
     compressionThresholdRatio: z.number().min(0.5).max(0.95), // 触发压缩的占用比
+    // 章节续写上下文装配模式：full=四份核心文件全量注入；targeted=按本章实体/伏笔定向检索注入。
+    // 带默认值：旧配置文件缺少该字段时按 targeted 解析，保证向后兼容。
+    retrievalMode: z.enum(["full", "targeted"]).default("targeted"),
     budgets: contextBudgetsSchema
   }).strict(),
   sessions: z.object({

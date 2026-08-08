@@ -1157,12 +1157,12 @@
   background: #f4f7fb;
 }
 
-.editor-shell :is(.novel-editor-topbar, .novel-editor-left, .novel-editor-card, .novel-assistant-panel) {
+.editor-shell :is(.novel-editor-topbar, .novel-editor-left, .novel-editor-card, .novel-editor-chat) {
   border-color: #e2e8f0;
   background: #ffffff;
 }
 
-.editor-shell .novel-editor-card {
+.editor-shell .novel-editor-center {
   box-shadow: 0 8px 24px rgb(39 65 94 / 0.055);
 }
 
@@ -1174,7 +1174,7 @@
   .novel-editor-empty svg,
   .novel-editor-field-grid small,
   .novel-role-section-head button:hover,
-  .novel-assistant-tabs button.active
+  .novel-storyline-group-head strong
 ) {
   color: #347fcf;
 }

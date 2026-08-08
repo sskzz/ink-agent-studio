@@ -156,7 +156,33 @@ export async function generateModelTextWithFallback(
     if (!deltaTimer) deltaTimer = setTimeout(flushDeltaBuffer, 400);
   };
 
-  for (const model of candidates) {
+  // 生成进度心跳：流式期间每 10 秒上报一次等待时长，保证前端执行详情持续可见进展
+  // （即使供应商长时间未返回首个增量，用户也能看到任务仍在进行）。
+  let progressTimer: ReturnType<typeof setInterval> | undefined;
+  const stopProgressHeartbeat = () => {
+    if (progressTimer) {
+      clearInterval(progressTimer);
+      progressTimer = undefined;
+    }
+  };
+  if (activeContext && input.stream) {
+    const startedWaiting = Date.now();
+    progressTimer = setInterval(() => {
+      try {
+        activeContext.eventStore.appendEvent(activeContext.runId, {
+          type: "stage_progress",
+          stage: activeContext.stage,
+          payload: { message: `模型生成中，已等待 ${Math.round((Date.now() - startedWaiting) / 1000)} 秒` }
+        });
+      } catch {
+        // 运行已结束等异常场景：心跳写入失败直接忽略
+      }
+    }, 10_000);
+    progressTimer.unref?.();
+  }
+
+  try {
+    for (const model of candidates) {
     const adapter = adapters.get(model.provider);
     // 跳过停用模型与未实现文本生成的 adapter
     if (!model.enabled || !adapter?.generateText) continue;
@@ -238,6 +264,9 @@ export async function generateModelTextWithFallback(
     retryable: false,
     message: "没有可用且已实现文本生成适配器的模型配置"
   });
+  } finally {
+    stopProgressHeartbeat();
+  }
 }
 
 /**

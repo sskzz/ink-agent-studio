@@ -86,6 +86,13 @@ describe("chapter writing style constraints", () => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
       const systemPrompt = body.messages[0]?.content ?? "";
       prompts.push(body.messages.map((message) => message.content).join("\n"));
+      // 章节意图/细纲规划请求：返回合法 JSON（不参与风格约束断言与调用计数）
+      if (systemPrompt.includes("规划师")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ schemaVersion: "chapter-intent.v1", mustKeep: ["保持悬念"], mustAvoid: ["提前回收伏笔"] }) } }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
       const content = systemPrompt.includes("写作风格审稿器")
         ? JSON.stringify({ schemaVersion: "semantic-style-review.v1", passed: true, score: 92, violations: [], warnings: [] })
         : systemPrompt.includes("修订模型")
@@ -122,8 +129,10 @@ describe("chapter writing style constraints", () => {
       body: JSON.stringify({ allowDegradedStyle: true })
     });
     expect(response.status).toBe(200);
-    expect(prompts).toHaveLength(4);
-    expect(prompts.every((prompt) => prompt.includes("第三人称贴身视角"))).toBe(true);
+    // 模型调用 = 章节意图规划 + 细纲规划 + 正文生成 + continue 语义审稿 + review 审稿 + polish 修订及复检 = 7 次
+    expect(prompts).toHaveLength(7);
+    // 风格约束进入正文生成/审稿/修订 prompt（意图规划 prompt 不含风格约束，不参与该断言）
+    expect(prompts.filter((prompt) => prompt.includes("第三人称贴身视角")).length).toBeGreaterThan(0);
     expect(prompts.some((prompt) => prompt.includes("【技能：章节续写】"))).toBe(true);
     expect(prompts.some((prompt) => prompt.includes("【技能：连续性审查】"))).toBe(true);
     expect(prompts.some((prompt) => prompt.includes("【技能：去 AI 味】"))).toBe(true);
@@ -201,7 +210,16 @@ describe("chapter writing style constraints", () => {
     const chapterId = ((await response.json()) as ApiPayload<{ id: string }>).data.id;
 
     let modelCalls = 0;
-    vi.stubGlobal("fetch", vi.fn(async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      // 章节意图/细纲规划请求：返回合法意图 JSON，不参与生成/修订的调用计数
+      if (systemPrompt.includes("规划师")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ schemaVersion: "chapter-intent.v1", mustKeep: [], mustAvoid: [] }) } }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" }
+        });
+      }
       modelCalls += 1;
       const content = modelCalls === 1
         ? `${"这是一个持续延伸且没有任何停顿的超长句子".repeat(12)}。`

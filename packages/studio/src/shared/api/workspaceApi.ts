@@ -85,6 +85,8 @@ export interface WorkspaceBookDetail {
   };
   progress: {
     currentChapter: string;
+    /** 后端用于定位当前章节的稳定 id；currentChapter 是展示用文本。 */
+    currentChapterId: string | null;
     writtenWords: number;
     writtenChapters: number;
     plannedChapters: number;
@@ -139,6 +141,7 @@ interface BackendBookDetail {
     writtenChapters: number;
     plannedChapters: number | null;
     currentChapterId: string | null;
+    currentChapterTitle?: string | null;
   };
   coreFiles: BackendBookFile[];
   worldview: BackendBookFile | null;
@@ -207,12 +210,20 @@ async function loadFileContent(bookId: string, file: BackendBookFile): Promise<W
   };
 }
 
+/** 实体类型英文值到中文展示名的映射，用于实体 Markdown 文档的“类型”栏。 */
+const entityTypeLabels: Record<WorkspaceBookEntity["entityType"], string> = {
+  character: "角色",
+  faction: "势力",
+  location: "地点",
+  item: "物品"
+};
+
 /** 把后端实体字段渲染为 markdown 文档，供详情页的实体区块展示。 */
 function createEntityMarkdown(entity: BackendBookEntity) {
   return `# ${entity.name}
 
 ## 类型
-${entity.entityType}
+${entityTypeLabels[entity.entityType] ?? entity.entityType}
 
 ## 定位
 ${entity.role || "待补充"}
@@ -253,7 +264,8 @@ async function toWorkspaceBookDetail(detail: BackendBookDetail): Promise<Workspa
       worldFileName: worldview.fileName
     },
     progress: {
-      currentChapter: detail.progress.currentChapterId ?? "尚未开始正文写作",
+      currentChapter: detail.progress.currentChapterTitle ?? "尚未开始正文写作",
+      currentChapterId: detail.progress.currentChapterId,
       writtenWords: detail.progress.writtenWords,
       writtenChapters: detail.progress.writtenChapters,
       plannedChapters: detail.progress.plannedChapters ?? 0
@@ -312,7 +324,8 @@ function toWorkspaceBookDetailWithoutContent(detail: BackendBookDetail): Workspa
       worldFileName: worldview.fileName
     },
     progress: {
-      currentChapter: detail.progress.currentChapterId ?? "尚未开始正文写作",
+      currentChapter: detail.progress.currentChapterTitle ?? "尚未开始正文写作",
+      currentChapterId: detail.progress.currentChapterId,
       writtenWords: detail.progress.writtenWords,
       writtenChapters: detail.progress.writtenChapters,
       plannedChapters: detail.progress.plannedChapters ?? 0

@@ -39,6 +39,7 @@ export interface PromptLayerTrace {
     originalEstimatedTokens: number;
     includedEstimatedTokens: number;
     truncated: boolean;
+    status: "included" | "truncated" | "dropped";
   }>;
 }
 
@@ -134,19 +135,28 @@ function assembleLayer(layer: PromptLayerInput) {
     content = truncateToTokens(content, layer.budgetTokens, "head");
   }
 
+  const sourceTrace = items.sort((left, right) => left.index - right.index).map((item) => {
+    const includedEstimatedTokens = item.content.trim() ? estimateTokens(item.content) : 0;
+    return {
+      id: item.source.id,
+      sourceRef: item.source.sourceRef ?? null,
+      originalEstimatedTokens: item.originalTokens,
+      includedEstimatedTokens,
+      truncated: includedEstimatedTokens < item.originalTokens,
+      status: includedEstimatedTokens === 0
+        ? "dropped" as const
+        : includedEstimatedTokens < item.originalTokens
+          ? "truncated" as const
+          : "included" as const
+    };
+  });
   const trace: PromptLayerTrace = {
     name: layer.name,
     budgetTokens: layer.budgetTokens,
     estimatedTokens: estimateTokens(content),
     contentHash: sha256(content),
-    truncated: items.some((item) => estimateTokens(item.content) < item.originalTokens),
-    sources: items.sort((left, right) => left.index - right.index).map((item) => ({
-      id: item.source.id,
-      sourceRef: item.source.sourceRef ?? null,
-      originalEstimatedTokens: item.originalTokens,
-      includedEstimatedTokens: estimateTokens(item.content),
-      truncated: estimateTokens(item.content) < item.originalTokens
-    }))
+    truncated: sourceTrace.some((source) => source.status !== "included"),
+    sources: sourceTrace
   };
   return { content, trace };
 }

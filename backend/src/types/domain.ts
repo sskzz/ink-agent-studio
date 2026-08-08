@@ -125,6 +125,12 @@ export interface ChapterRecord {
   updatedAt: string;
 }
 
+/** 思考模式配置（DeepSeek V4）：enabled 开关 + effort 推理强度（null 表示用服务商默认档）。 */
+export interface ModelThinkingConfig {
+  enabled: boolean;
+  effort: "low" | "high" | "max" | null;
+}
+
 /** 模型配置记录，保存在 config/model-configs.json；apiKey 不落盘在此。 */
 export interface ModelConfigRecord {
   id: string;
@@ -136,6 +142,7 @@ export interface ModelConfigRecord {
   enabled: boolean;
   isDefault: boolean;
   capabilities: Record<string, unknown>;
+  thinking: ModelThinkingConfig | null;
   note: string;
   createdAt: string;
   updatedAt: string;

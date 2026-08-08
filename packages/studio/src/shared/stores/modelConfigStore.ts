@@ -22,7 +22,7 @@ import type {
   ModelUsageSettings
 } from "@/shared/types/domain";
 
-/** 新建配置时的空表单草稿：默认 OpenAI 兼容协议与“写作”用途，降低首填成本。 */
+/** 新建配置时的空表单草稿：默认 OpenAI 兼容协议与“写作”用途；DeepSeek 思考模式默认开启 + max。 */
 const emptyDraft: ModelConfigDraft = {
   name: "",
   provider: "openai-compatible",
@@ -33,6 +33,7 @@ const emptyDraft: ModelConfigDraft = {
   enabled: true,
   isDefault: false,
   capabilities: {},
+  thinking: { enabled: true, effort: "max" },
   note: ""
 };
 

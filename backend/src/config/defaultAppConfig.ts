@@ -38,6 +38,8 @@ export const defaultAppConfig = {
     defaultMaxOutputTokens: 4_096,
     safetyMarginRatio: 0.1,
     compressionThresholdRatio: 0.7,
+    // 默认定向注入：facts 层只装配本章相关实体/伏笔/状态与核心基线，显著缩小 prompt
+    retrievalMode: "targeted",
     budgets: {
       stableMaxTokens: 4_000,
       factsMaxTokens: 8_000,
@@ -83,10 +85,10 @@ export const defaultAppConfig = {
     misfirePolicy: "run_once"
   },
   features: {
-    asyncRuns: false,
+    asyncRuns: true,
     agentLoop: false,
     patchApply: false,
-    skills: false,
+    skills: true,
     plugins: false,
     mcp: false,
     cron: false

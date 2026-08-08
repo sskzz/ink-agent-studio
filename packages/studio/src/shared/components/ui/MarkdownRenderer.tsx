@@ -8,12 +8,67 @@ interface MarkdownRendererProps {
  * 轻量 Markdown 渲染组件（共享）。
  *
  * 第一版只做前端预览，不引入外部依赖：
- * - 块级：标题（1-3 级）、段落、无序/有序列表、引用、代码块、分割线。
+ * - 块级：标题（1-3 级）、段落、无序/有序列表、引用、代码块、分割线、GFM 表格。
  * - 行内：加粗、行内代码。
  * 后续如需完整 GFM 可整体替换为 markdown-it/remark 管线，本组件接口保持不变。
  */
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return <div className="markdown-preview">{renderMarkdownBlocks(content)}</div>;
+}
+
+/** GFM 表格行切分：按未转义的 | 拆列，并去掉首尾空列（管道符不在行首尾时没有）。 */
+function splitTableRow(line: string) {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+/** 识别 GFM 表格分隔行（如 | --- | :---: |），返回 null 表示不是分隔行。 */
+function isTableSeparatorRow(line: string) {
+  const cells = splitTableRow(line);
+  if (cells.length < 2) return null;
+  const pattern = /^:?-{3,}:?$/;
+  return cells.every((cell) => pattern.test(cell)) ? cells.length : null;
+}
+
+/** 解析表格块：识别 header 行 + 分隔行，收集到下一个空行或非表格行。 */
+function parseTableBlock(lines: string[], startIndex: number): { block: ReactNode; nextIndex: number } | null {
+  const headerCells = splitTableRow(lines[startIndex] ?? "");
+  const separatorColumnCount = isTableSeparatorRow(lines[startIndex + 1] ?? "");
+  if (separatorColumnCount === null) return null;
+
+  let index = startIndex + 2;
+  const bodyRows: string[][] = [];
+  while (index < lines.length) {
+    const line = (lines[index] ?? "").trim();
+    if (!line) break;
+    if (line.startsWith("```") || /^#{1,3}\s+/.test(line) || /^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line)) break;
+    const cells = splitTableRow(line);
+    if (cells.length < 2) break;
+    bodyRows.push(cells);
+    index += 1;
+  }
+
+  const columnCount = Math.max(headerCells.length, separatorColumnCount);
+  const block = (
+    <div className="markdown-table-wrap" key={`table-${startIndex}`}>
+      <table>
+        <thead>
+          <tr>{headerCells.map((cell) => <th key={cell}>{renderInlineMarkdown(cell)}</th>)}</tr>
+        </thead>
+        <tbody>
+          {bodyRows.map((row, rowIndex) => (
+            <tr key={`${startIndex}-${rowIndex}`}>
+              {Array.from({ length: columnCount }, (_, columnIndex) => (
+                <td key={columnIndex}>{renderInlineMarkdown(row[columnIndex] ?? "")}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  return { block, nextIndex: index };
 }
 
 /** 把 markdown 文本切分为块级 ReactNode 序列：按行扫描，逐块识别并消费连续行。 */
@@ -30,6 +85,16 @@ function renderMarkdownBlocks(content: string) {
     if (!trimmedLine) {
       index += 1;
       continue;
+    }
+
+    // GFM 表格：表头行 + 分隔行，收集数据行直到空行或非表格内容。
+    if (lines[index]?.includes("|")) {
+      const table = parseTableBlock(lines, index);
+      if (table) {
+        blocks.push(table.block);
+        index = table.nextIndex;
+        continue;
+      }
     }
 
     // 代码块：以 ``` 开头，收集到下一个 ``` 为止，内部内容原样输出。

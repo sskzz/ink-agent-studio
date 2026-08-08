@@ -4,12 +4,13 @@
  * 新建作品会把上传的 world.md 正文一并写入后端。
  */
 import type { RunEvent } from "@ink-agent/contracts";
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, MutableRefObject } from "react";
 import { Trash2 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { subscribeRunEvents, pauseRun } from "@/features/runs/api/runsApi";
-import { listWritingStyles } from "@/features/writing-styles/api/writingStylesApi";
+import { getRun, subscribeRunEvents, pauseRun } from "@/features/runs/api/runsApi";
+import { listWritingStyles, listWritingStyleVersions } from "@/features/writing-styles/api/writingStylesApi";
+import type { WritingStyleVersionDto } from "@/features/writing-styles/api/writingStylesApi";
 import type { WritingStyle } from "@/features/writing-styles/data/writingStyles";
 import {
   createWorkspaceBook,
@@ -65,7 +66,9 @@ const initializationStageLabels: Record<string, string> = {
   supporting_entities: "地点与次要角色",
   items: "关键物品",
   initial_state: "初始状态与伏笔池",
-  consistency_review: "全局一致性检查",
+  review_entity_state: "实体与初始状态交叉检查",
+  review_fact_fidelity: "事实忠实度检查",
+  review_bundle: "全局硬冲突检查",
   apply_bundle: "写入作品文件"
 };
 
@@ -90,6 +93,44 @@ function getWritingStyleName(styles: WritingStyle[], styleId: string) {
   return styles.find((style) => style.id === styleId)?.name ?? "";
 }
 
+/** 版本创建时间格式化为“YY-MM-DD”，用于风格版本的展示名。 */
+function formatVersionDate(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "未知日期";
+  }
+
+  return date.toLocaleString("zh-CN", {
+    year: "2-digit",
+    month: "2-digit",
+    day: "2-digit"
+  });
+}
+
+/**
+ * 风格版本展示名：优先用“风格名称 · 版本日期”，并标记是否最新；
+ * 版本记录缺失时回退到风格名称，避免直接暴露后端版本 id。
+ */
+function getStyleVersionLabel(
+  styles: WritingStyle[],
+  versionRecords: Map<string, WritingStyleVersionDto>,
+  styleId: string,
+  versionId: string
+) {
+  if (!versionId) return "未固定版本";
+  const style = styles.find((item) => item.id === styleId);
+  const styleName = style?.name ?? "未知风格";
+  const version = versionRecords.get(versionId);
+
+  if (!version) {
+    return style?.latestVersionId === versionId ? `${styleName} · 最新版本` : styleName;
+  }
+
+  const isLatest = style?.latestVersionId === versionId;
+  return `${styleName} · ${formatVersionDate(version.createdAt)}${isLatest ? "（最新）" : ""}`;
+}
+
 /** 数字按千分位格式化，用于字数统计展示。 */
 function formatNumber(value: number) {
   return new Intl.NumberFormat("zh-CN").format(value);
@@ -104,6 +145,7 @@ export function WorkspacePage() {
   const [createdDraft, setCreatedDraft] = useState<BookDraft | null>(null);
   const [books, setBooks] = useState<BookDetail[]>([]);
   const [writingStyles, setWritingStyles] = useState<WritingStyle[]>([]);
+  const [styleVersions, setStyleVersions] = useState<Map<string, WritingStyleVersionDto>>(new Map());
   const [selectedBookId, setSelectedBookId] = useState("");
   const [activeDocument, setActiveDocument] = useState<DetailDocument | null>(null);
   const [loading, setLoading] = useState(false);
@@ -150,10 +192,23 @@ export function WorkspacePage() {
 
       try {
         const [nextBooks, nextStyles] = await Promise.all([listWorkspaceBookDetails(), listWritingStyles()]);
+        // 版本 id 是后端生成的不透明值，需要版本元信息（创建时间等）才能展示为可读名称。
+        const versionRecords = new Map<string, WritingStyleVersionDto>();
+        await Promise.all(nextStyles.map(async (style) => {
+          if (!style.latestVersionId) return;
+          try {
+            for (const version of await listWritingStyleVersions(style.id)) {
+              versionRecords.set(version.id, version);
+            }
+          } catch {
+            // 单个风格版本读取失败不阻塞页面；对应版本行回退为风格名称。
+          }
+        }));
 
         if (!ignore) {
           setBooks(nextBooks);
           setWritingStyles(nextStyles);
+          setStyleVersions(versionRecords);
           setSelectedBookId((currentId) =>
             nextBooks.some((book) => book.id === currentId) ? currentId : nextBooks[0]?.id ?? ""
           );
@@ -163,6 +218,7 @@ export function WorkspacePage() {
         if (!ignore) {
           setBooks([]);
           setWritingStyles([]);
+          setStyleVersions(new Map());
           setSelectedBookId("");
           setFeedback(`后端作品库读取失败：${toMessage(error)}`);
         }
@@ -227,24 +283,79 @@ export function WorkspacePage() {
     }
     let ignore = false;
     let terminal = false;
+    let latestEventSeq = -1;
+    let snapshotSeq = -1;
     setInitializationEvents([]);
     setInitializationStreamError("");
-    return subscribeRunEvents(
+    const applyRunSnapshot = (snapshot: Awaited<ReturnType<typeof getRun>>) => {
+      const status = snapshot.status;
+      snapshotSeq = snapshot.lastEventSeq;
+      terminal = ["cancelled", "completed", "failed", "interrupted"].includes(status);
+      setBooks((current) => current.map((book) => book.id === selectedBookId
+        ? {
+            ...book,
+            initialization: {
+              runId: snapshot.id,
+              status,
+              stage: snapshot.currentStage,
+              error: snapshot.error && typeof snapshot.error === "object" && "message" in snapshot.error
+                ? String((snapshot.error as { message: unknown }).message)
+                : snapshot.error ? String(snapshot.error) : null
+            }
+          }
+        : book
+      ));
+    };
+
+    // 先取一次快照，再订阅从头重放，确保页面不会遗漏“查询与建立 SSE 连接”之间的事件。
+    void getRun(runId).then((snapshot) => {
+      // SSE 可能先收到更新事件；过期快照不能把页面状态回退到旧阶段。
+      if (!ignore && snapshot.lastEventSeq >= latestEventSeq) applyRunSnapshot(snapshot);
+    }).catch(() => {
+      if (!ignore) setInitializationStreamError("无法读取执行快照，正在等待实时事件...");
+    });
+
+    const unsubscribe = subscribeRunEvents(
       runId,
       (event) => {
         if (ignore) return;
-        if (["run_completed", "run_failed", "run_cancelled", "run_interrupted"].includes(event.type)) {
-          terminal = true;
+        const isNewEvent = event.seq > latestEventSeq;
+        latestEventSeq = Math.max(latestEventSeq, event.seq);
+        const isNewerThanSnapshot = isNewEvent && event.seq > snapshotSeq;
+        if (isNewerThanSnapshot) {
+          if (["run_completed", "run_failed", "run_cancelled", "run_interrupted"].includes(event.type)) {
+            terminal = true;
+          } else {
+            terminal = false;
+          }
+        }
+        if (isNewerThanSnapshot) {
+          setBooks((current) => current.map((book) => book.id === selectedBookId
+            ? { ...book, initialization: projectInitializationEvent(book.initialization, event) }
+            : book
+          ));
         }
         setInitializationEvents((current) => {
           if (current.some((item) => item.seq === event.seq)) return current;
           return [...current, event].sort((left, right) => left.seq - right.seq);
         });
+        if (isNewerThanSnapshot && ["run_completed", "run_failed", "run_cancelled", "run_interrupted"].includes(event.type)) {
+          void getWorkspaceBookDetail(selectedBookId).then((updated) => {
+            if (!ignore) setBooks((current) => current.map((book) => book.id === updated.id ? updated : book));
+          }).catch(() => {
+            // 事件已经能完整展示；作品文件刷新失败时交给下一次状态轮询重试。
+          });
+        }
       },
       () => {
         if (!ignore && !terminal) setInitializationStreamError("执行事件流已断开，请刷新页面查看最新状态。");
-      }
+      },
+      { afterSeq: -1 }
     );
+    return () => {
+      ignore = true;
+      unsubscribe();
+    };
   }, [selectedBook?.initialization?.runId, streamRefreshKey, view]);
 
   /** 局部更新新建作品表单草稿。 */
@@ -467,6 +578,7 @@ export function WorkspacePage() {
         <BookDetailView
           book={selectedBook}
           writingStyles={writingStyles}
+          styleVersions={styleVersions}
           onOpenDocument={setActiveDocument}
           onRetryInitialization={() => void retryInitialization()}
           onPauseInitialization={() => void pauseInitialization()}
@@ -502,6 +614,7 @@ export function WorkspacePage() {
 interface BookDetailViewProps {
   book: BookDetail;
   writingStyles: WritingStyle[];
+  styleVersions: Map<string, WritingStyleVersionDto>;
   onOpenDocument: (document: DetailDocument) => void;
   onRetryInitialization: () => void;
   onPauseInitialization: () => void;
@@ -517,6 +630,7 @@ interface BookDetailViewProps {
 function BookDetailView({
   book,
   writingStyles,
+  styleVersions,
   onOpenDocument,
   onRetryInitialization,
   onPauseInitialization,
@@ -528,7 +642,7 @@ function BookDetailView({
   const attributeRows = [
     ["作品类型", book.genre],
     ["写作风格", getWritingStyleName(writingStyles, book.writingStyleId) || "AI 自动选择"],
-    ["风格版本", book.writingStyleVersionId ? book.writingStyleVersionId.slice(0, 24) : "未固定版本"],
+    ["风格版本", getStyleVersionLabel(writingStyles, styleVersions, book.writingStyleId, book.writingStyleVersionId)],
     ["人称", book.attributes.narrationPerspective],
     ["频道", book.attributes.channel],
     ["主角性别", book.attributes.protagonistGender],
@@ -548,14 +662,99 @@ function BookDetailView({
     return false;
   }, [book.initialization?.status, initializationEvents]);
 
-  // 把模型流式增量事件（model_delta）拼成实时输出文本，仅截取末尾 6000 字符展示。
-  const liveOutput = useMemo(
-    () => initializationEvents
-      .filter((event) => event.type === "model_delta")
-      .map((event) => String(event.payload.delta ?? ""))
-      .join(""),
+  // 初始化状态卡的执行详情（事件列表 + 实时输出）默认收起，通过按钮展开。
+  const [initializationDetailsOpen, setInitializationDetailsOpen] = useState(false);
+
+  // 切换到新的 Run 后恢复收起状态，避免沿用上一次 Run 的展开状态。
+  useEffect(() => {
+    setInitializationDetailsOpen(false);
+  }, [book.initialization?.runId]);
+
+  // model_delta 是实时输出的内部增量，不单独作为执行日志展示，避免关键物品等阶段刷出大量无意义行。
+  const executionEvents = useMemo(
+    () => initializationEvents.filter((event) => event.type !== "model_delta"),
     [initializationEvents]
   );
+  const liveOutput = useMemo(() => {
+    let previousStage: string | null | undefined;
+    return initializationEvents
+      .filter((event) => event.type === "model_delta")
+      .map((event) => {
+        const stage = event.stage ?? null;
+        const heading = stage !== previousStage
+          ? `\n\n--- ${stage ? initializationStageLabels[stage] ?? stage : "模型输出"} ---\n`
+          : "";
+        previousStage = stage;
+        return heading + String(event.payload.delta ?? "");
+      })
+      .join("");
+  }, [initializationEvents]);
+
+  // 执行详情 / 实时输出自动定位到最新内容；只有用户主动操作过滚动容器后才保留其阅读位置。
+  const eventsListRef = useRef<HTMLOListElement | null>(null);
+  const liveOutputRef = useRef<HTMLPreElement | null>(null);
+  const followEventsRef = useRef(true);
+  const followOutputRef = useRef(true);
+  const eventsUserInteractionRef = useRef(false);
+  const outputUserInteractionRef = useRef(false);
+  const eventsScrollFrameRef = useRef<number | null>(null);
+  const outputScrollFrameRef = useRef<number | null>(null);
+  const updateFollowState = (element: HTMLElement, target: MutableRefObject<boolean>) => {
+    target.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+  };
+  const markUserInteraction = (target: MutableRefObject<boolean>) => {
+    target.current = true;
+  };
+  const scrollToLatest = (element: HTMLElement) => {
+    element.scrollTop = element.scrollHeight;
+  };
+  useEffect(() => {
+    // 切换到新的 Run 后恢复自动跟随，避免沿用上一次 Run 的手动滚动状态。
+    eventsUserInteractionRef.current = false;
+    outputUserInteractionRef.current = false;
+    followEventsRef.current = true;
+    followOutputRef.current = true;
+  }, [book.initialization?.runId]);
+  useLayoutEffect(() => {
+    const element = eventsListRef.current;
+    if (!element || eventsUserInteractionRef.current || !followEventsRef.current) return;
+    scrollToLatest(element);
+    if (eventsScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(eventsScrollFrameRef.current);
+    }
+    eventsScrollFrameRef.current = window.requestAnimationFrame(() => {
+      eventsScrollFrameRef.current = null;
+      if (!eventsUserInteractionRef.current && followEventsRef.current && eventsListRef.current) {
+        scrollToLatest(eventsListRef.current);
+      }
+    });
+    return () => {
+      if (eventsScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(eventsScrollFrameRef.current);
+        eventsScrollFrameRef.current = null;
+      }
+    };
+  }, [executionEvents.length]);
+  useLayoutEffect(() => {
+    const element = liveOutputRef.current;
+    if (!element || outputUserInteractionRef.current || !followOutputRef.current) return;
+    scrollToLatest(element);
+    if (outputScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(outputScrollFrameRef.current);
+    }
+    outputScrollFrameRef.current = window.requestAnimationFrame(() => {
+      outputScrollFrameRef.current = null;
+      if (!outputUserInteractionRef.current && followOutputRef.current && liveOutputRef.current) {
+        scrollToLatest(liveOutputRef.current);
+      }
+    });
+    return () => {
+      if (outputScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(outputScrollFrameRef.current);
+        outputScrollFrameRef.current = null;
+      }
+    };
+  }, [liveOutput]);
 
   return (
     <section className="book-detail-view">
@@ -587,13 +786,32 @@ function BookDetailView({
             </button>
           ) : null}
           {initializationEvents.length > 0 ? (
+            <button
+              className="ghost-button"
+              type="button"
+              aria-expanded={initializationDetailsOpen}
+              onClick={() => setInitializationDetailsOpen((open) => !open)}
+            >
+              {initializationDetailsOpen ? "收起详情" : "展开详情"}
+            </button>
+          ) : null}
+          {initializationEvents.length > 0 && initializationDetailsOpen ? (
             <div className="book-initialization-detail">
               <div className="book-initialization-detail-title">
                 <strong>执行详情</strong>
-                <span>{initializationStreamError || `${initializationEvents.length} 条事件`}</span>
+                <span>{initializationStreamError || `${executionEvents.length} 条执行记录`}</span>
               </div>
-              <ol className="book-initialization-events">
-                {initializationEvents.map((event) => (
+              <ol
+                className="book-initialization-events"
+                ref={eventsListRef}
+                onScroll={(event) => updateFollowState(event.currentTarget, followEventsRef)}
+                onPointerDown={() => markUserInteraction(eventsUserInteractionRef)}
+                onWheel={() => markUserInteraction(eventsUserInteractionRef)}
+                onTouchMove={() => markUserInteraction(eventsUserInteractionRef)}
+                onKeyDown={() => markUserInteraction(eventsUserInteractionRef)}
+                tabIndex={0}
+              >
+                {executionEvents.map((event) => (
                   <InitializationEventRow key={event.eventId} event={event} />
                 ))}
               </ol>
@@ -603,7 +821,18 @@ function BookDetailView({
                     <strong>实时输出</strong>
                     <span>模型流式返回</span>
                   </div>
-                  <pre className="book-initialization-live-text">{liveOutput.slice(-6000)}</pre>
+                  <pre
+                    className="book-initialization-live-text"
+                    ref={liveOutputRef}
+                    onScroll={(event) => updateFollowState(event.currentTarget, followOutputRef)}
+                    onPointerDown={() => markUserInteraction(outputUserInteractionRef)}
+                    onWheel={() => markUserInteraction(outputUserInteractionRef)}
+                    onTouchMove={() => markUserInteraction(outputUserInteractionRef)}
+                    onKeyDown={() => markUserInteraction(outputUserInteractionRef)}
+                    tabIndex={0}
+                  >
+                    {liveOutput.slice(-6000)}
+                  </pre>
                 </div>
               ) : null}
             </div>
@@ -752,6 +981,50 @@ function initializationStatusTitle(status: NonNullable<BookDetail["initializatio
   return "AI 正在生成作品信息";
 }
 
+/** 把 SSE 事件立即投影到详情页状态，避免等待下一轮轮询才看到阶段和终态变化。 */
+function projectInitializationEvent(
+  current: BookDetail["initialization"],
+  event: RunEvent
+): NonNullable<BookDetail["initialization"]> {
+  const next = current ?? {
+    runId: event.runId,
+    status: "queued" as const,
+    stage: null,
+    error: null
+  };
+
+  switch (event.type) {
+    case "run_queued":
+      return { ...next, runId: event.runId, status: "queued", stage: null, error: null };
+    case "run_started":
+      return { ...next, runId: event.runId, status: "running", error: null };
+    case "stage_started":
+    case "stage_progress":
+      return { ...next, runId: event.runId, status: "running", stage: event.stage, error: null };
+    case "stage_completed":
+      return { ...next, runId: event.runId, status: "running", stage: null, error: null };
+    case "cancel_requested":
+      return { ...next, runId: event.runId, status: "cancelling" };
+    case "run_completed":
+      return { ...next, runId: event.runId, status: "completed", stage: null, error: null };
+    case "run_failed":
+      return { ...next, runId: event.runId, status: "failed", stage: null, error: eventErrorMessage(event.payload.error) };
+    case "run_cancelled":
+      return { ...next, runId: event.runId, status: "cancelled", stage: null, error: null };
+    case "run_interrupted":
+      return { ...next, runId: event.runId, status: "interrupted", stage: null, error: eventErrorMessage(event.payload.reason) };
+    default:
+      return next;
+  }
+}
+
+function eventErrorMessage(value: unknown) {
+  if (value && typeof value === "object" && "message" in value) {
+    return String((value as { message: unknown }).message);
+  }
+  return value ? String(value) : null;
+}
+
 /** 初始化事件行：按事件类型渲染为可读文案，并决定行内色调。 */
 function InitializationEventRow({ event }: { event: RunEvent }) {
   const detail = initializationEventDetail(event);
@@ -787,12 +1060,27 @@ function initializationEventDetail(event: RunEvent): { text: string; tone: "norm
     }
     case "model_attempt_completed": {
       const succeeded = event.payload.status === "completed";
-      const status = succeeded ? "成功" : String(event.payload.status ?? "结束");
+      const status = succeeded ? "成功" : attemptStatusLabels[String(event.payload.status ?? "结束")] ?? String(event.payload.status ?? "结束");
       const tokens = typeof event.payload.totalTokens === "number" ? `${event.payload.totalTokens} Token` : null;
       const latency = typeof event.payload.latencyMs === "number" ? `${event.payload.latencyMs} ms` : null;
       const suffix = [tokens, latency].filter(Boolean).join(" · ");
-      return { text: `${prefix}模型调用${status}${suffix ? ` · ${suffix}` : ""}`, tone: succeeded ? "success" : "error" };
+      // 失败时展示后端归一化的具体原因与 HTTP 状态码，避免只看到“模型服务暂时不可用”这种笼统文案。
+      const error = event.payload.error as { message?: unknown; status?: number | null } | null;
+      const errorText = !succeeded && error && typeof error === "object"
+        ? `：${String(error.message ?? "未知错误")}${typeof error.status === "number" ? `（HTTP ${error.status}）` : ""}`
+        : "";
+      return { text: `${prefix}模型调用${status}${suffix ? ` · ${suffix}` : ""}${errorText}`, tone: succeeded ? "success" : "error" };
     }
+    case "tool_started": {
+      const tool = String(event.payload.tool ?? event.payload.name ?? "");
+      return { text: `${prefix}开始调用${tool ? `工具：${tool}` : "工具"}`, tone: "info" };
+    }
+    case "tool_completed": {
+      const tool = String(event.payload.tool ?? event.payload.name ?? "");
+      return { text: `${prefix}${tool ? `工具：${tool}` : "工具"}调用完成`, tone: "success" };
+    }
+    case "model_delta":
+      return { text: `${prefix}实时输出已更新`, tone: "info" };
     case "checkpoint_saved":
       return { text: `${prefix}检查点已保存，可中断恢复`, tone: "info" };
     case "degraded":
@@ -815,7 +1103,7 @@ function initializationEventDetail(event: RunEvent): { text: string; tone: "norm
     case "run_cancelled":
       return { text: "执行已取消", tone: "error" };
     default:
-      return { text: `${prefix}${event.type.replaceAll("_", " ")}`, tone: "normal" };
+      return { text: `${prefix}执行状态已更新`, tone: "normal" };
   }
 }
 
@@ -827,6 +1115,14 @@ function formatEventTime(value: string) {
     second: "2-digit"
   }).format(new Date(value));
 }
+
+/** 模型尝试终态的中文标签（与后端 ModelAttempt status 对应）。 */
+const attemptStatusLabels: Record<string, string> = {
+  completed: "成功",
+  failed: "失败",
+  cancelled: "已取消",
+  timed_out: "超时"
+};
 
 interface CreateBookViewProps {
   draft: BookDraft;

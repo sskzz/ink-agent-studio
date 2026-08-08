@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import {
   continueChapter,
   createChapter,
+  deleteChapter,
   getChapter,
   listChapters,
   updateChapter
@@ -50,6 +51,18 @@ chaptersRoute.put("/books/:bookId/chapters/:chapterId", async (context) => {
     context,
     await updateChapter(paths(), context.req.param("bookId"), context.req.param("chapterId"), await context.req.json()),
     "章节已保存"
+  );
+});
+
+/**
+ * DELETE /api/v1/books/:bookId/chapters/:chapterId：删除章节（索引与正文文件一并移除，
+ * 刷新作品进度；已发布章节拒绝删除）。
+ */
+chaptersRoute.delete("/books/:bookId/chapters/:chapterId", async (context) => {
+  return jsonOk(
+    context,
+    await deleteChapter(paths(), context.req.param("bookId"), context.req.param("chapterId")),
+    "章节已删除"
   );
 });
 

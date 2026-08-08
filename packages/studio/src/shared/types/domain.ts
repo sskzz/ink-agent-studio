@@ -79,6 +79,12 @@ export interface ModelProfile {
  * 当前通过 Hono 后端保存到本地 workspace；apiKey 字段只用于表单提交，
  * 后端列表和详情接口不会回显真实密钥。
  */
+/** 思考模式配置（DeepSeek V4）：enabled 开关 + effort 推理强度（null 表示用服务商默认档）。 */
+export interface ModelThinkingConfig {
+  enabled: boolean;
+  effort: "low" | "high" | "max" | null;
+}
+
 export interface ModelConfig {
   id: string;
   name: string;
@@ -97,6 +103,7 @@ export interface ModelConfig {
     };
     [key: string]: unknown;
   };
+  thinking: ModelThinkingConfig | null;
   note: string;
   updatedAt: string;
 }

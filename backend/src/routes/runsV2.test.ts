@@ -1,10 +1,11 @@
-// Run V2 路由测试：创建/执行/查询/SSE 事件流重放、重放缺口超过上限返回 409。
+// Run V2 路由测试：创建/执行/查询/SSE 事件流重放、重放缺口超过上限返回 409、
+// 恢复（resume）后重放必须包含旧终态事件之后的新事件。
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../app.js";
-import { RunCoordinator } from "../modules/agents/runCoordinator.js";
+import { RunCoordinator, type RunCommandHandler } from "../modules/agents/runCoordinator.js";
 import { createWorkspacePaths } from "../modules/workspace/workspacePaths.js";
 import { ensureWorkspace } from "../modules/workspace/workspaceService.js";
 import { createApplicationServices, type ApplicationServices } from "../runtime/applicationServices.js";
@@ -22,7 +23,7 @@ afterEach(async () => {
   tempRoot = null;
 });
 
-async function createTestApp(options: { replayLimit?: number } = {}) {
+async function createTestApp(options: { replayLimit?: number; handler?: RunCommandHandler } = {}) {
   tempRoot = await mkdtemp(path.join(os.tmpdir(), "ink-agent-runs-route-"));
   const paths = createWorkspacePaths(tempRoot);
   await ensureWorkspace(paths);
@@ -45,7 +46,8 @@ async function createTestApp(options: { replayLimit?: number } = {}) {
       context.setStage("generate");
       context.emitDelta("第一段");
       return { draft: "第一段" };
-    }
+    },
+    ...(options.handler ? { initialize_book: options.handler } : {})
   });
   return createApp(services);
 }
@@ -119,5 +121,49 @@ describe("Run V2 routes", () => {
     expect(replayResponse.status).toBe(409);
     const payload = (await replayResponse.json()) as { data: { details: { replayLimit: number } } };
     expect(payload.data.details.replayLimit).toBe(2);
+  });
+
+  it("replays events appended after a terminal event when the run is resumed", async () => {
+    let invocation = 0;
+    const app = await createTestApp({
+      handler: async (context) => {
+        invocation += 1;
+        context.setStage("generate");
+        context.emitDelta(`第${invocation}段`);
+        // 第一次执行失败，恢复后第二次成功：同一 Run 的事件流出现"旧终态 → 新事件"
+        if (invocation === 1) throw new Error("首次失败");
+        return { draft: `第${invocation}段` };
+      }
+    });
+    let response = await app.request("/api/v1/runs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        command: {
+          schemaVersion: "run-command.v1",
+          type: "initialize_book",
+          bookId: "book-1",
+          input: { trigger: "test" }
+        },
+        parentRunId: null
+      })
+    });
+    const accepted = (await response.json()) as { data: { runId: string; eventsUrl: string } };
+    await services!.runCoordinator.waitForIdle();
+
+    response = await app.request(`/api/v1/runs/${accepted.data.runId}`);
+    const failed = (await response.json()) as { data: { status: string } };
+    expect(failed.data.status).toBe("failed");
+
+    // 恢复同一 Run（resumeSystem 允许 failed 状态的 initialize_book），产生旧终态之后的新事件
+    await services!.runCoordinator.resumeSystem(accepted.data.runId);
+    await services!.runCoordinator.waitForIdle();
+
+    response = await app.request(accepted.data.eventsUrl);
+    const replay = await response.text();
+    // 回归断言：重放必须包含旧终态事件之后的新事件（旧实现会在 run_failed 处截断流）
+    expect(replay.indexOf("event: run_failed")).toBeGreaterThanOrEqual(0);
+    expect(replay.lastIndexOf("event: run_queued")).toBeGreaterThan(replay.indexOf("event: run_failed"));
+    expect(replay).toContain("event: run_completed");
   });
 });

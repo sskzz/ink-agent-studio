@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import { discoverAvailableModels } from "@/shared/api/modelConfigApi";
-import { providerOptions, purposeLabel, purposeOptions } from "@/config/modelOptions";
+import { providerOptions, purposeLabel, purposeOptions, reasoningEffortOptions } from "@/config/modelOptions";
 import { Badge } from "@/shared/components/ui/Badge";
 import { PageHeader } from "@/shared/components/ui/PageHeader";
 import { SelectField } from "@/shared/components/ui/SelectField";
@@ -612,6 +612,38 @@ function ModelDetailView({
           </div>
           <small>价格不会自动猜测；填写币种和输入/输出单价后，Run 才会记录估算成本。</small>
         </fieldset>
+
+        {draft.provider === "deepseek" ? (
+          <fieldset className="fieldset">
+            <legend>思考模式（DeepSeek V4）</legend>
+            <div className="toggle-row">
+              <label className="inline-switch">
+                <input
+                  checked={draft.thinking?.enabled ?? true}
+                  type="checkbox"
+                  onChange={(event) => onChange({
+                    thinking: { enabled: event.target.checked, effort: draft.thinking?.effort ?? "max" }
+                  })}
+                />
+                <span>开启思考模式</span>
+              </label>
+            </div>
+            <label className="field">
+              <span>推理强度</span>
+              <SelectField
+                value={draft.thinking?.effort ?? "max"}
+                options={reasoningEffortOptions}
+                onChange={(value) => onChange({
+                  thinking: {
+                    enabled: draft.thinking?.enabled ?? true,
+                    effort: value as "low" | "high" | "max"
+                  }
+                })}
+              />
+            </label>
+            <small>deepseek-v4-flash 支持 low/high/max 三档；deepseek-v4-pro 仅 high/max（low 按 high 处理）。关闭思考模式可显著降低延迟，适合结构化 JSON 任务。</small>
+          </fieldset>
+        ) : null}
 
         <label className="field full">
           <span>备注</span>

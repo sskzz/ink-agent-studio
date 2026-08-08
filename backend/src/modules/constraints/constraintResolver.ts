@@ -17,8 +17,9 @@ export interface GenerationConstraint {
 }
 
 /** 把消解结果压成可审计的紧凑追踪信息（约束内容哈希 + 摘要），供 Run trace 落库。 */
-export function createConstraintResolutionTrace(resolution: ConstraintResolution) {
-  const compact = (constraint: GenerationConstraint) => ({
+export function createConstraintResolutionTrace(resolution: ConstraintResolution, includedConstraintIds: string[] = []) {
+  const included = new Set(includedConstraintIds);
+  const compact = (constraint: GenerationConstraint, deliveryStatus: "included" | "resolved_only" | "dropped") => ({
     id: constraint.id,
     key: constraint.key,
     source: constraint.source,
@@ -29,11 +30,12 @@ export function createConstraintResolutionTrace(resolution: ConstraintResolution
       ? `${constraint.source} constraint from ${constraint.sourceRef.fileId}`
       : constraint.text.replace(/\s+/g, " ").slice(0, 80),
     sourceRef: constraint.sourceRef ?? null,
-    metric: constraint.metric ?? null
+    metric: constraint.metric ?? null,
+    deliveryStatus
   });
   return {
-    applied: resolution.applied.map(compact),
-    dropped: resolution.dropped.map(compact),
+    applied: resolution.applied.map((item) => compact(item, included.has(item.id) ? "included" : "resolved_only")),
+    dropped: resolution.dropped.map((item) => compact(item, "dropped")),
     conflicts: resolution.conflicts,
     degraded: resolution.degraded,
     warnings: resolution.warnings

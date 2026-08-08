@@ -49,3 +49,10 @@ export const purposeLabel: Record<ModelPurpose, string> = {
   embedding: "向量/记忆",
   image: "图片/封面"
 };
+
+/** DeepSeek 思考模式推理强度选项（与后端 modelThinkingConfigSchema 保持一致）。 */
+export const reasoningEffortOptions: Array<{ label: string; value: "low" | "high" | "max" }> = [
+  { label: "low（快速）", value: "low" },
+  { label: "high（标准）", value: "high" },
+  { label: "max（深度）", value: "max" }
+];

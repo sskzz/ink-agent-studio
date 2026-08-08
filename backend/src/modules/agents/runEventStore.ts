@@ -96,6 +96,20 @@ export class RunEventStore {
   ) {}
 
   /**
+   * 清理 Run 的恢复专用数据（断点续写结束后的会话内容清除）。
+   * 删除：model_delta 事件（实时正文增量）与 run_checkpoints（阶段检查点）；
+   * 保留：run 快照、stage 事件序列、run_artifacts 阶段产物与 model_attempts（审计轨迹）。
+   * 说明：阶段产物（draft/intent 等 artifacts）保留便于追溯，体积小；
+   * 若需彻底清除恢复痕迹，可扩展删除 run_artifacts。
+   */
+  pruneRunRecoveryData(runId: string) {
+    this.runtimeDatabase.transaction((database) => {
+      database.prepare("DELETE FROM run_checkpoints WHERE run_id = ?").run(runId);
+      database.prepare("DELETE FROM run_events WHERE run_id = ? AND event_type = 'model_delta'").run(runId);
+    });
+  }
+
+  /**
    * 创建 Run 快照并写入 run_created / run_queued 事件（同一事务）。
    * 入参：command 命令、父子关系、session/触发消息、配置版本与哈希。
    * 失败处理：父 Run、Session、触发消息任一不满足约束都会抛出冲突/未找到错误并整体回滚。

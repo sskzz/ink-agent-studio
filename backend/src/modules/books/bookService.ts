@@ -3,6 +3,7 @@
  * 边界：只编排业务逻辑与校验，文件持久化委托给 bookRepository，风格校验委托给 styles 模块。
  */
 import { bookDraftInputSchema, bookRecordSchema } from "../../schemas/bookSchemas.js";
+import { chaptersIndexSchema } from "../../schemas/chapterSchemas.js";
 import type { BookFileRecord, BookRecord } from "../../types/domain.js";
 import { badRequest } from "../../utils/errors.js";
 import { readJsonFile } from "../../utils/jsonStore.js";
@@ -54,7 +55,11 @@ function toBookListItem(book: BookRecord) {
 }
 
 /** 作品详情 DTO：聚合属性、进度、附属文件，并拆出核心文件与世界观文件。 */
-function toBookDetailDto(book: BookRecord, files: BookFileRecord[]) {
+function toBookDetailDto(
+  book: BookRecord,
+  files: BookFileRecord[],
+  currentChapter: { chapterNo: number; title: string } | null = null
+) {
   const worldFile = files.find((file) => file.fileType === "world") ?? null;
   const coreFiles = files.filter((file) =>
     ["brief", "outline", "current_state", "foreshadowing"].includes(file.fileType)
@@ -78,7 +83,8 @@ function toBookDetailDto(book: BookRecord, files: BookFileRecord[]) {
       writtenChapters: book.writtenChapters,
       plannedChapters:
         book.plannedWords && book.chapterWords ? Math.ceil(book.plannedWords / book.chapterWords) : null,
-      currentChapterId: book.currentChapterId
+      currentChapterId: book.currentChapterId,
+      currentChapterTitle: currentChapter ? `${currentChapter.chapterNo}. ${currentChapter.title}` : null
     },
     files,
     coreFiles,
@@ -97,7 +103,13 @@ export async function listBookSummaries(workspacePaths: WorkspacePaths) {
 export async function getBookDetail(workspacePaths: WorkspacePaths, bookId: string) {
   const book = await getBook(workspacePaths, bookId);
   const files = await getBookFiles(workspacePaths, bookId);
-  return toBookDetailDto(book, files);
+  const chapters = await readJsonFile(
+    createBookPaths(workspacePaths, bookId).chaptersIndexFile,
+    chaptersIndexSchema,
+    []
+  );
+  const currentChapter = chapters.find((chapter) => chapter.id === book.currentChapterId) ?? null;
+  return toBookDetailDto(book, files, currentChapter);
 }
 
 /**

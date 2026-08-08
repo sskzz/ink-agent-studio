@@ -8,6 +8,7 @@ import {
   upgradeBookWritingStyleVersion
 } from "../modules/books/bookService.js";
 import { jsonOk } from "../utils/http.js";
+import { getBookStoryline } from "../modules/books/storylineService.js";
 import type { ApplicationServices } from "../runtime/applicationServices.js";
 import {
   enqueueBookInitialization,
@@ -69,6 +70,14 @@ export function createBooksRoute(services: ApplicationServices) {
     const bookId = context.req.param("bookId");
     const detail = await getBookDetail(services.paths, bookId);
     return jsonOk(context, { ...detail, initialization: latestBookInitialization(services, bookId) });
+  });
+
+  /**
+   * GET /api/v1/books/:bookId/storyline：故事线快照（主体/阶段进度、当前位置、短期伏笔、角色状态）。
+   */
+  route.get("/books/:bookId/storyline", async (context) => {
+    const storyline = await getBookStoryline(services.paths, context.req.param("bookId"));
+    return jsonOk(context, storyline);
   });
 
   /**

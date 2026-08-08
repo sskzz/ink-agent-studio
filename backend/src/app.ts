@@ -19,6 +19,7 @@ import { createPatchesRoute } from "./routes/patches.js";
 import { createSessionsRoute } from "./routes/sessions.js";
 import { createSkillsRoute } from "./routes/skills.js";
 import { createMemoryRoute } from "./routes/memory.js";
+import { createChatRoute } from "./routes/chat.js";
 
 /**
  * Hono 应用装配。
@@ -85,6 +86,7 @@ export function createApp(services: ApplicationServices = createApplicationServi
   app.route("/api/v1", writingStylesRoute);
   app.route("/api/v1", antiAiConstraintsRoute);
   app.route("/api/v1", createSettingsRoute(services.configService));
+  app.route("/api/v1", createChatRoute(services));
 
   app.notFound((context) => jsonError(context, 14040, "接口不存在", 404));
 

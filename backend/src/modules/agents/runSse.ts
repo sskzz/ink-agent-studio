@@ -43,11 +43,15 @@ export function createRunSseStream(
 
   return new ReadableStream<Uint8Array>({
     start(controller) {
+      // 重放阶段不因终态事件关闭流：resume 同一 Run 时，旧终态事件后面还有新事件，
+      // 中途关闭会截断整个流（前端只能看到旧内容）。终态关闭只发生在：
+      // ① 重放结束后快照仍为终态（terminalAtOpen）；② 运行过程中实时到达终态事件。
+      let replaying = true;
       const send = (event: RunEvent) => {
         if (closed || event.seq <= lastSentSeq) return;
         lastSentSeq = event.seq;
         controller.enqueue(encoder.encode(formatSseEvent(event)));
-        if (terminalEventTypes.has(event.type)) {
+        if (!replaying && terminalEventTypes.has(event.type)) {
           cleanup();
           controller.close();
         }
@@ -62,6 +66,7 @@ export function createRunSseStream(
         send(event);
         if (closed) return;
       }
+      replaying = false;
 
       if (options.terminalAtOpen) {
         cleanup();
