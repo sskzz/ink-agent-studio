@@ -15,13 +15,14 @@ import { hashStyleValue } from "./styleHash.js";
 import {
   getWritingStyleSample,
   getWritingStyleVersion,
-  listWritingStyleSamples,
   listWritingStyleVersions,
   saveWritingStyleVersion
 } from "./writingStyleRepository.js";
 import { getWritingStyle, updateWritingStyleRecord } from "./writingStyleService.js";
 import { selectWritingStyleSamples, type StyleSampleSelection } from "./writingStyleSampleSelector.js";
 import { withWritingStyleLock } from "./writingStyleLock.js";
+import { refreshOutdatedStyleSamples } from "./writingStyleSampleService.js";
+import { WRITING_STYLE_FEATURE_VERSION } from "./writingStyleFeatures.js";
 
 type WritingStyleRecord = z.infer<typeof writingStyleRecordSchema>;
 
@@ -75,7 +76,7 @@ export async function rebuildWritingStyleVersion(paths: WorkspacePaths, styleId:
   const style = await getWritingStyle(paths, styleId);
   await updateWritingStyleRecord(paths, styleId, { status: "analyzing" });
   try {
-  const samples = await listWritingStyleSamples(paths, styleId);
+  const samples = await refreshOutdatedStyleSamples(paths, styleId);
   // 两阶段选择：先用全部可用样本做初步聚合（拿置信度），再用置信度做正式样本选择，
   // 避免质量不一的样本拉低聚合置信度又反过来影响样本准入
   const baseSelection = selectWritingStyleSamples(samples);
@@ -101,7 +102,7 @@ export async function rebuildWritingStyleVersion(paths: WorkspacePaths, styleId:
     styleId,
     schemaVersion: "writing-style-version.v1" as const,
     analysisVersion: semanticProfile.schemaVersion,
-    featureVersion: "style-features.v1",
+    featureVersion: WRITING_STYLE_FEATURE_VERSION,
     aggregationVersion: "style-aggregate.v1",
     compilerVersion: "style-compiler.v2",
     sampleIds: samples.map((sample) => sample.id).sort(),

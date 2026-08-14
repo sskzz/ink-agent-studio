@@ -46,8 +46,8 @@ export interface WritingStyleLocalStats {
   semicolonRatio: number;
   colonRatio: number;
   lexicalDiversity: number;
-  repeatedBigramRatio: number;
-  repeatedTrigramRatio: number;
+  repeated12GramRatio: number;
+  duplicateParagraphRatio: number;
   repeatedParagraphOpeningRatio: number;
   connectorDensity: number;
   causalExplanationDensity: number;
@@ -55,6 +55,16 @@ export interface WritingStyleLocalStats {
   paragraphSummaryCandidateRatio: number;
   sampleTruncated: boolean;
   sampledCharacterCount: number;
+  repetitionSampledCharacterCount: number;
+  chapterHeadingCount: number;
+  headingRatio: number;
+  outlineLineRatio: number;
+  metadataLineRatio: number;
+  proseLineRatio: number;
+  proseCharacterRatio: number;
+  speakerLineRatio: number;
+  bodyCharacterCount: number;
+  sentenceEndCount: number;
   detectedFileType: string;
 }
 

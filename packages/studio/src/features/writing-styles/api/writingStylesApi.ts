@@ -12,6 +12,7 @@ interface BackendWritingStyle {
   summary: string;
   parameters: Record<string, unknown>;
   sampleFileName: string | null;
+  seedSampleId?: string | null;
   analysis?: BackendStyleAnalysis;
   featureProfile?: BackendStyleFeatureProfile;
   createdAt: string;
@@ -22,13 +23,26 @@ interface BackendWritingStyle {
   status?: "draft" | "analyzing" | "ready" | "degraded" | "invalid";
 }
 
-/** 样本 DTO：quality.usable 标记样本是否可用于分析，warnings 为质检警告。 */
+/** 样本 DTO：status 明确区分稳定样本、弱证据与排除样本；role 标记初始模板。 */
 export interface WritingStyleSampleDto {
   id: string;
   fileName: string;
   contentLength: number;
   contentHash: string;
-  quality: { usable: boolean; weight: number; detectedContentType: string; warnings: string[] };
+  role?: "seed" | "reference";
+  quality: {
+    usable: boolean;
+    status?: "accepted" | "weak" | "rejected";
+    weight: number;
+    detectedContentType: string;
+    warnings: string[];
+    diagnostics?: {
+      headingRatio: number;
+      proseCharacterRatio: number;
+      repeated12GramRatio: number;
+      duplicateParagraphRatio: number;
+    };
+  };
   createdAt: string;
 }
 
@@ -44,7 +58,7 @@ export interface WritingStyleVersionDto {
 
 /** 后端特征画像：仅分析成功时存在，作为 rawFeatureProfile 透传给页面。 */
 interface BackendStyleFeatureProfile {
-  schemaVersion: "style-features.v1";
+  schemaVersion: "style-features.v1" | "style-features.v2";
   sourceContentLength: number;
   metrics: Record<string, number>;
 }
@@ -70,6 +84,7 @@ interface CreateWritingStyleInput {
   parameters?: Record<string, unknown>;
   sampleFileName?: string | null;
   analysis?: AnalysisResult;
+  seedSample?: { fileName: string; content: string };
 }
 
 /** 分析入参：需要一份模板文本 content，供后端提取风格特征。 */
@@ -127,11 +142,12 @@ function createParametersFromSource(source: Record<string, unknown>): StyleParam
     ];
   }
 
-  return entries.map(([key, value], index) => ({
+  const overallConfidence = typeof source.confidence === "number" ? Math.max(0, Math.min(100, source.confidence)) : 60;
+  return entries.map(([key, value]) => ({
     label: parameterLabel[key] ?? key,
     value: toDisplayValue(value),
     description: parameterDescription[key] ?? "由后端风格分析接口生成的结构化参数。",
-    score: Math.max(62, 92 - index * 6)
+    score: overallConfidence
   }));
 }
 
@@ -173,14 +189,14 @@ function createAnalysis(record: BackendWritingStyle, parameters: StyleParameter[
 function toWritingStyle(record: BackendWritingStyle): WritingStyle {
   const parameters = createParametersFromSource(record.analysis?.parameters ?? record.parameters);
   const analysis = createAnalysis(record, parameters);
-  const sourceFiles = record.sampleFileName ? [record.sampleFileName] : ["待补充模板作品"];
   const rawParameters = record.analysis?.parameters ?? record.parameters;
 
   return {
     id: record.id,
     name: record.name,
     summary: record.summary || analysis.summary,
-    sourceFiles,
+    seedSampleId: record.seedSampleId,
+    legacySourceFileName: record.seedSampleId ? null : record.sampleFileName,
     tags: record.parameters && Object.keys(record.parameters).length > 0 ? ["AI 分析", "本地后端"] : ["草稿", "本地后端"],
     lastAnalyzed: formatDateTime(record.updatedAt),
     metrics: {
@@ -260,7 +276,8 @@ export async function createWritingStyle(input: CreateWritingStyleInput): Promis
     analysis,
     featureProfile: isFeatureProfile(input.analysis?.rawFeatureProfile)
       ? input.analysis.rawFeatureProfile
-      : undefined
+      : undefined,
+    seedSample: input.seedSample
   });
 
   return toWritingStyle(record);
@@ -286,7 +303,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** 类型守卫：是否为后端特征画像结构（v1 schema + metrics 对象）。 */
 function isFeatureProfile(value: unknown): value is BackendStyleFeatureProfile {
-  return isRecord(value) && value.schemaVersion === "style-features.v1" && isRecord(value.metrics);
+  return isRecord(value)
+    && (value.schemaVersion === "style-features.v1" || value.schemaVersion === "style-features.v2")
+    && isRecord(value.metrics);
 }
 
 /** AI 分析风格：后端用样本内容提取特征后落库并返回完整风格。 */
@@ -310,9 +329,19 @@ export async function addWritingStyleSample(styleId: string, input: { fileName: 
   return apiPost<WritingStyleSampleDto>(`/writing-styles/${styleId}/samples`, input);
 }
 
+/** 按最新版特征与质量规则重新分析当前风格全部样本。 */
+export async function reanalyzeWritingStyleSamples(styleId: string) {
+  return apiPost<WritingStyleSampleDto[]>(`/writing-styles/${styleId}/samples/reanalyze`, {});
+}
+
 /** 删除样本：同时移除该文件在风格中的参与权重。 */
 export async function deleteWritingStyleSample(styleId: string, sampleId: string) {
   return apiDelete<{ id: string; deleted: boolean }>(`/writing-styles/${styleId}/samples/${sampleId}`);
+}
+
+/** 永久删除风格及其样本、版本和编译缓存；被作品引用时后端会拒绝。 */
+export async function deleteWritingStyle(styleId: string) {
+  return apiDelete<{ id: string; deleted: boolean }>(`/writing-styles/${styleId}`);
 }
 
 /** 风格版本历史：用于版本化管理与回溯。 */

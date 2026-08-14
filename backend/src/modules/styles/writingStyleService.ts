@@ -12,7 +12,8 @@ import {
   type WritingStyleAnalysis
 } from "../../schemas/styleSchemas.js";
 import { readJsonFile, writeJsonFile } from "../../utils/jsonStore.js";
-import { notFound } from "../../utils/errors.js";
+import { conflict, notFound } from "../../utils/errors.js";
+import { listBooks } from "../books/bookRepository.js";
 import { generateModelText } from "../ai/modelGateway.js";
 import { getModelConfig, getModelRoutes } from "../models/modelConfigRepository.js";
 import type { WorkspacePaths } from "../workspace/workspacePaths.js";
@@ -22,8 +23,14 @@ import {
   type WritingStyleLocalStats
 } from "./writingStyleAnalysisPrompt.js";
 import { createWritingStyleFeatureProfile, extractWritingStyleFeatures } from "./writingStyleFeatures.js";
-import { syncWritingStyleDetail } from "./writingStyleRepository.js";
+import {
+  deleteWritingStyleStorage,
+  saveWritingStyleSample,
+  syncWritingStyleDetail
+} from "./writingStyleRepository.js";
 import { withWritingStyleLock } from "./writingStyleLock.js";
+import { createWritingStyleSampleRecord } from "./writingStyleSampleFactory.js";
+import { resolveWritingStyleSampleStatus } from "./writingStyleSampleQuality.js";
 
 /** 读取风格索引（缺文件时返回空数组）。 */
 async function readStyles(workspacePaths: WorkspacePaths) {
@@ -56,21 +63,29 @@ export async function getWritingStyle(workspacePaths: WorkspacePaths, styleId: s
 export async function createWritingStyle(workspacePaths: WorkspacePaths, body: unknown) {
   const input = writingStyleCreateInputSchema.parse(body);
   const now = new Date().toISOString();
+  const styleId = randomUUID();
+  const seed = input.seedSample
+    ? createWritingStyleSampleRecord(styleId, { ...input.seedSample, role: "seed" })
+    : null;
   const style = {
-    id: randomUUID(),
+    id: styleId,
     name: input.name,
     summary: input.summary,
     parameters: input.parameters,
-    sampleFileName: input.sampleFileName,
+    // sampleFileName 仅为旧前端兼容字段；新逻辑以 seedSampleId 和统一样本库为准。
+    sampleFileName: seed?.sample.fileName ?? input.sampleFileName,
     analysis: input.analysis,
     featureProfile: input.featureProfile,
+    seedSampleId: seed?.sample.id ?? null,
     latestVersionId: null,
-    sampleCount: 0,
-    validSampleCount: 0,
+    sampleCount: seed ? 1 : 0,
+    validSampleCount: seed && resolveWritingStyleSampleStatus(seed.sample.quality) === "accepted" ? 1 : 0,
     status: input.analysis ? "degraded" as const : "draft" as const,
     createdAt: now,
     updatedAt: now
   };
+  // 先落样本、后发布风格索引；不会暴露一个只有文件名、没有正文的半成品风格。
+  if (seed) await saveWritingStyleSample(workspacePaths, seed.sample, seed.content);
   await withWritingStyleLock("__style-index__", async () => {
     const styles = await readStyles(workspacePaths);
     await writeStyles(workspacePaths, [style, ...styles]);
@@ -95,6 +110,36 @@ export async function updateWritingStyleRecord(
   });
   await syncWritingStyleDetail(workspacePaths, next);
   return next;
+}
+
+/**
+ * 永久删除写作风格及其全部本地资产。
+ * 已被作品引用的风格拒绝删除，避免留下无法解析的 writingStyleId/versionId。
+ */
+export async function deleteWritingStyle(workspacePaths: WorkspacePaths, styleId: string) {
+  return withWritingStyleLock(styleId, async () => {
+    const styles = await readStyles(workspacePaths);
+    const existing = styles.find((item) => item.id === styleId);
+    if (!existing) throw notFound("写作风格不存在", { styleId });
+
+    const referencingBooks = (await listBooks(workspacePaths)).filter((book) => book.writingStyleId === styleId);
+    if (referencingBooks.length > 0) {
+      throw conflict("该写作风格仍被作品使用，请先在作品设置中更换或取消该风格", {
+        styleId,
+        books: referencingBooks.map((book) => ({ id: book.id, title: book.title }))
+      });
+    }
+
+    await withWritingStyleLock("__style-index__", async () => {
+      const currentStyles = await readStyles(workspacePaths);
+      if (!currentStyles.some((item) => item.id === styleId)) {
+        throw notFound("写作风格不存在", { styleId });
+      }
+      await writeStyles(workspacePaths, currentStyles.filter((item) => item.id !== styleId));
+    });
+    await deleteWritingStyleStorage(workspacePaths, styleId);
+    return { id: styleId, deleted: true as const };
+  });
 }
 
 /**

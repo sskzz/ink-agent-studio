@@ -8,9 +8,19 @@ import type { WritingStyleFeatureProfile } from "../../schemas/styleSchemas.js";
 
 /** 代表段落抽样上限：控制模型输入长度，超长文本按锚点抽样。 */
 const maxRepresentativeChars = 4000;
+/** 长文本统计抽样上限：按 12 个位置均匀取样，避免全文 n-gram 指标随篇幅失真。 */
+const maxStatisticalChars = 120_000;
+const statisticalWindowCount = 12;
+export const WRITING_STYLE_FEATURE_VERSION = "style-features.v2" as const;
 /** 短句/长句字数阈值，用于节奏分档。 */
 const shortSentenceLimit = 15;
 const longSentenceLimit = 40;
+
+/** 章节标题只作为结构边界，不作为元数据或正文风格证据。 */
+const chapterHeadingPattern = /^(?:#{1,6}\s+)?第[0-9零〇一二三四五六七八九十百千万两]+(?:章|节|卷|部|回|幕)(?:\s*[:：._—-]?\s*.*)?$/u;
+const outlineLinePattern = /^(?:[-*+]\s+|\d{1,3}[.)、]\s*)/u;
+const metadataLinePattern = /^(?:书名|作者|分类|标签|状态|字数|更新时间|简介|来源|网址|版权|下载地址)\s*[:：]/u;
+const speakerLinePattern = /^(?!书名|作者|分类|标签|状态|字数|更新时间|简介|来源|网址|版权|下载地址)[\p{L}\p{N}_·-]{1,12}\s*[:：]\s*\S+/u;
 
 // 以下词表为启发式词典：覆盖常见网络小说词汇，漏词只会让密度偏低，不会造成误判
 const perceptionWords = ["看见", "看到", "望见", "听见", "听到", "闻到", "察觉", "感觉", "注意到", "意识到"];
@@ -36,19 +46,30 @@ const templatePatterns = [/(?:不是).{0,20}(?:而是)/gu, /(?:仿佛|似乎|宛
 export function extractWritingStyleFeatures(content: string, sampleFileName: string) {
   const source = content.trim();
   const rawLines = source.split(/\r?\n/);
-  const paragraphs = rawLines.map((line) => line.trim()).filter(Boolean);
+  const allParagraphs = rawLines.map((line) => line.trim()).filter(Boolean);
+  const chapterHeadings = allParagraphs.filter(isChapterHeading);
+  const paragraphs = allParagraphs.filter((line) => !isChapterHeading(line));
+  const bodySource = paragraphs.join("\n");
   // 以句末标点切分句子（省略号视为句末），过滤空串
-  const sentences = source.split(/[。！？!?…]+/u).map((item) => item.trim()).filter(Boolean);
+  const sentences = bodySource.split(/[。！？!?…]+/u).map((item) => item.trim()).filter(Boolean);
   const sentenceLengths = sentences.map((sentence) => sentence.length);
   const paragraphLengths = paragraphs.map((paragraph) => paragraph.length);
   const quoteLineCount = paragraphs.filter(hasDialogue).length;
-  const dialogueCharacters = extractDialogueCharacters(source);
+  const dialogueCharacters = extractDialogueCharacters(bodySource);
   const dialogueParagraphs = paragraphs.filter(hasDialogue);
   const pureDialogueCount = dialogueParagraphs.filter((paragraph) => isPureDialogue(paragraph)).length;
   const dialogueWithActionCount = dialogueParagraphs.filter((paragraph) => !isPureDialogue(paragraph)).length;
-  const normalizedCharacters = Array.from(source.replace(/\s/gu, ""));
   // 代表段落抽样：全文短时直接用全文，超长时按 0/20%/40%/60%/80%/100% 锚点位置取段落并均分字符预算
   const representativeSample = sampleRepresentativeParagraphs(paragraphs, maxRepresentativeChars);
+  const statisticalSample = sampleStratifiedText(bodySource, maxStatisticalChars, statisticalWindowCount);
+  const normalizedStatisticalCharacters = Array.from(normalizeForRepetition(statisticalSample));
+  const outlineLines = paragraphs.filter((line) => outlineLinePattern.test(line));
+  const metadataLines = paragraphs.filter((line) => metadataLinePattern.test(line));
+  const classificationBody = paragraphs.filter((line) => !outlineLinePattern.test(line) && !metadataLinePattern.test(line));
+  const proseLines = classificationBody.filter(isProseLine);
+  const bodyCharacters = paragraphs.reduce((sum, line) => sum + line.length, 0);
+  const proseCharacters = proseLines.reduce((sum, line) => sum + line.length, 0);
+  const speakerLines = paragraphs.filter((line) => speakerLinePattern.test(line));
 
   const stats: WritingStyleLocalStats = {
     contentLength: source.length,
@@ -63,43 +84,53 @@ export function extractWritingStyleFeatures(content: string, sampleFileName: str
     independentShortParagraphRatio: ratio(paragraphLengths.filter((length) => length <= 15).length, paragraphs.length),
     paragraphLengthStdDev: standardDeviation(paragraphLengths),
     dialogueRatio: ratio(quoteLineCount, paragraphs.length),
-    dialogueCharacterRatio: ratio(dialogueCharacters, normalizedCharacters.length),
+    dialogueCharacterRatio: ratio(dialogueCharacters, bodySource.replace(/\s/gu, "").length),
     pureDialogueParagraphRatio: ratio(pureDialogueCount, dialogueParagraphs.length),
     dialogueWithActionRatio: ratio(dialogueWithActionCount, dialogueParagraphs.length),
     maxConsecutiveDialogueParagraphs: maxConsecutive(paragraphs.map(hasDialogue)),
-    speechTagDensity: density(source, speechTags),
+    speechTagDensity: density(bodySource, speechTags),
     quoteLineCount,
     blankLineRatio: ratio(rawLines.length - paragraphs.length, rawLines.length),
-    firstPersonMarkerCount: countWords(source, ["我", "我们", "咱们"]),
-    secondPersonMarkerCount: countWords(source, ["你", "你们", "您"]),
-    thirdPersonMarkerCount: countWords(source, ["他", "她", "他们", "她们", "它", "它们"]),
-    firstPersonMarkerDensity: density(source, ["我", "我们", "咱们"]),
-    secondPersonMarkerDensity: density(source, ["你", "你们", "您"]),
-    thirdPersonMarkerDensity: density(source, ["他", "她", "他们", "她们", "它", "它们"]),
-    perceptionVerbDensity: density(source, perceptionWords),
-    psychologyWordDensity: density(source, psychologyWords),
-    actionWordDensity: density(source, actionWords),
-    sensoryWordDensity: density(source, sensoryWords),
-    environmentWordDensity: density(source, environmentWords),
-    concreteObjectWordDensity: density(source, concreteObjectWords),
-    abstractEmotionWordDensity: density(source, abstractEmotionWords),
-    adjectiveAdverbMarkerDensity: density(source, modifierMarkers),
-    questionMarkRatio: ratio(countMatches(source, /[？?]/gu), Math.max(sentences.length, 1)),
-    exclamationMarkRatio: ratio(countMatches(source, /[！!]/gu), Math.max(sentences.length, 1)),
-    ellipsisRatio: ratio(countMatches(source, /(?:……|\.{3,})/gu), Math.max(sentences.length, 1)),
-    dashRatio: ratio(countMatches(source, /(?:——|—)/gu), Math.max(sentences.length, 1)),
-    semicolonRatio: ratio(countMatches(source, /[；;]/gu), Math.max(sentences.length, 1)),
-    colonRatio: ratio(countMatches(source, /[：:]/gu), Math.max(sentences.length, 1)),
-    lexicalDiversity: lexicalDiversity(normalizedCharacters),
-    repeatedBigramRatio: repeatedNgramRatio(normalizedCharacters, 2),
-    repeatedTrigramRatio: repeatedNgramRatio(normalizedCharacters, 3),
+    firstPersonMarkerCount: countWords(bodySource, ["我", "我们", "咱们"]),
+    secondPersonMarkerCount: countWords(bodySource, ["你", "你们", "您"]),
+    thirdPersonMarkerCount: countWords(bodySource, ["他", "她", "他们", "她们", "它", "它们"]),
+    firstPersonMarkerDensity: density(bodySource, ["我", "我们", "咱们"]),
+    secondPersonMarkerDensity: density(bodySource, ["你", "你们", "您"]),
+    thirdPersonMarkerDensity: density(bodySource, ["他", "她", "他们", "她们", "它", "它们"]),
+    perceptionVerbDensity: density(bodySource, perceptionWords),
+    psychologyWordDensity: density(bodySource, psychologyWords),
+    actionWordDensity: density(bodySource, actionWords),
+    sensoryWordDensity: density(bodySource, sensoryWords),
+    environmentWordDensity: density(bodySource, environmentWords),
+    concreteObjectWordDensity: density(bodySource, concreteObjectWords),
+    abstractEmotionWordDensity: density(bodySource, abstractEmotionWords),
+    adjectiveAdverbMarkerDensity: density(bodySource, modifierMarkers),
+    questionMarkRatio: ratio(countMatches(bodySource, /[？?]/gu), Math.max(sentences.length, 1)),
+    exclamationMarkRatio: ratio(countMatches(bodySource, /[！!]/gu), Math.max(sentences.length, 1)),
+    ellipsisRatio: ratio(countMatches(bodySource, /(?:……|\.{3,})/gu), Math.max(sentences.length, 1)),
+    dashRatio: ratio(countMatches(bodySource, /(?:——|—)/gu), Math.max(sentences.length, 1)),
+    semicolonRatio: ratio(countMatches(bodySource, /[；;]/gu), Math.max(sentences.length, 1)),
+    colonRatio: ratio(countMatches(bodySource, /[：:]/gu), Math.max(sentences.length, 1)),
+    lexicalDiversity: lexicalDiversity(normalizedStatisticalCharacters),
+    repeated12GramRatio: repeatedNgramRatio(normalizedStatisticalCharacters, 12),
+    duplicateParagraphRatio: duplicateParagraphRatio(paragraphs),
     repeatedParagraphOpeningRatio: repeatedOpeningRatio(paragraphs),
-    connectorDensity: density(source, connectors),
-    causalExplanationDensity: density(source, causalMarkers),
-    templatePatternDensity: round(templatePatterns.reduce((sum, pattern) => sum + countMatches(source, pattern), 0) * 1000 / Math.max(source.length, 1)),
+    connectorDensity: density(bodySource, connectors),
+    causalExplanationDensity: density(bodySource, causalMarkers),
+    templatePatternDensity: round(templatePatterns.reduce((sum, pattern) => sum + countMatches(bodySource, pattern), 0) * 1000 / Math.max(bodySource.length, 1)),
     paragraphSummaryCandidateRatio: ratio(paragraphs.filter((paragraph) => summaryMarkers.some((marker) => paragraph.slice(-40).includes(marker))).length, paragraphs.length),
     sampleTruncated: representativeSample.length < source.length,
     sampledCharacterCount: representativeSample.length,
+    repetitionSampledCharacterCount: statisticalSample.length,
+    chapterHeadingCount: chapterHeadings.length,
+    headingRatio: ratio(chapterHeadings.length, allParagraphs.length),
+    outlineLineRatio: ratio(outlineLines.length, paragraphs.length),
+    metadataLineRatio: ratio(metadataLines.length, paragraphs.length),
+    proseLineRatio: ratio(proseLines.length, classificationBody.length),
+    proseCharacterRatio: ratio(proseCharacters, bodyCharacters),
+    speakerLineRatio: ratio(speakerLines.length, paragraphs.length),
+    bodyCharacterCount: bodySource.length,
+    sentenceEndCount: countMatches(bodySource, /[。！？!?]/gu),
     detectedFileType: sampleFileName.includes(".") ? sampleFileName.split(".").pop()?.toLowerCase() ?? "unknown" : "unknown"
   };
 
@@ -109,7 +140,7 @@ export function extractWritingStyleFeatures(content: string, sampleFileName: str
 /** 只持久化可用于生成后量化比较的稳定指标，排除文件名、计数和抽样状态等运行元数据。 */
 export function createWritingStyleFeatureProfile(stats: WritingStyleLocalStats): WritingStyleFeatureProfile {
   return {
-    schemaVersion: "style-features.v1",
+    schemaVersion: WRITING_STYLE_FEATURE_VERSION,
     sourceContentLength: stats.contentLength,
     metrics: {
       averageSentenceLength: stats.averageSentenceLength,
@@ -128,8 +159,6 @@ export function createWritingStyleFeatureProfile(stats: WritingStyleLocalStats):
       concreteObjectWordDensity: stats.concreteObjectWordDensity,
       abstractEmotionWordDensity: stats.abstractEmotionWordDensity,
       lexicalDiversity: stats.lexicalDiversity,
-      repeatedBigramRatio: stats.repeatedBigramRatio,
-      repeatedTrigramRatio: stats.repeatedTrigramRatio,
       repeatedParagraphOpeningRatio: stats.repeatedParagraphOpeningRatio,
       connectorDensity: stats.connectorDensity,
       causalExplanationDensity: stats.causalExplanationDensity,
@@ -155,6 +184,23 @@ function sampleRepresentativeParagraphs(paragraphs: string[], limit: number) {
     .map((index) => paragraphs[index]!);
   const perParagraphLimit = Math.floor((limit - Math.max(selected.length - 1, 0)) / Math.max(selected.length, 1));
   return selected.map((paragraph) => paragraph.slice(0, perParagraphLimit)).join("\n").slice(0, limit);
+}
+
+/** 对超长正文按位置均匀抽样，保证重复度计算的成本和长度偏差都有上限。 */
+function sampleStratifiedText(content: string, limit: number, windows: number) {
+  if (content.length <= limit) return content;
+  const windowLength = Math.floor(limit / windows);
+  const selected: string[] = [];
+  for (let index = 0; index < windows; index += 1) {
+    const center = Math.round((content.length - 1) * index / Math.max(windows - 1, 1));
+    let start = Math.max(0, Math.min(content.length - windowLength, center - Math.floor(windowLength / 2)));
+    if (start > 0) {
+      const nextBreak = content.indexOf("\n", start);
+      if (nextBreak >= 0 && nextBreak - start < 500) start = nextBreak + 1;
+    }
+    selected.push(content.slice(start, start + windowLength));
+  }
+  return selected.join("\n").slice(0, limit + windows);
 }
 
 function average(values: number[]) { return values.length ? round(values.reduce((sum, value) => sum + value, 0) / values.length) : 0; }
@@ -186,12 +232,38 @@ function countWords(content: string, words: string[]) {
 }
 /** 字种数占比：衡量用词丰富度 */
 function lexicalDiversity(characters: string[]) { return ratio(new Set(characters).size, characters.length); }
-/** 重复 n-gram 占比：重复的 n-gram 每多出现一次计一次「多余重复」，除以总 n-gram 数 */
+/** 重复长片段占比：12 字片段在定长抽样中重复才计数，避免二元组随全文长度自然趋近 1。 */
 function repeatedNgramRatio(characters: string[], size: number) {
   if (characters.length < size) return 0;
   const counts = new Map<string, number>();
   for (let index = 0; index <= characters.length - size; index++) { const gram = characters.slice(index, index + size).join(""); counts.set(gram, (counts.get(gram) ?? 0) + 1); }
   return ratio([...counts.values()].filter((count) => count > 1).reduce((sum, count) => sum + count - 1, 0), characters.length - size + 1);
+}
+/** 完全重复段落的字符覆盖率；短段落和章节标题不计，重点识别广告、声明和重复粘贴。 */
+function duplicateParagraphRatio(paragraphs: string[]) {
+  const counts = new Map<string, { count: number; length: number }>();
+  let totalCharacters = 0;
+  for (const paragraph of paragraphs) {
+    const normalized = normalizeForRepetition(paragraph);
+    if (normalized.length < 12) continue;
+    totalCharacters += normalized.length;
+    const current = counts.get(normalized);
+    counts.set(normalized, { count: (current?.count ?? 0) + 1, length: normalized.length });
+  }
+  const duplicateCharacters = [...counts.values()]
+    .filter((item) => item.count > 1)
+    .reduce((sum, item) => sum + (item.count - 1) * item.length, 0);
+  return ratio(duplicateCharacters, totalCharacters);
+}
+/** 重复度归一化：兼容全半角，忽略空白、标点和符号，只比较有效文本片段。 */
+function normalizeForRepetition(value: string) { return value.normalize("NFKC").replace(/[\s\p{P}\p{S}]+/gu, ""); }
+/** 严格章节标题识别：只有短行且整行匹配时才视为标题。 */
+function isChapterHeading(value: string) { return value.length <= 80 && chapterHeadingPattern.test(value); }
+/** 正文证据：有句末标点，或包含足够汉字的长行。 */
+function isProseLine(value: string) {
+  if (/[。！？!?]/u.test(value)) return true;
+  if (value.length < 20) return false;
+  return ratio(countMatches(value, /[\p{Script=Han}]/gu), value.length) >= 0.5;
 }
 /** 段首开头重复占比：取每段前 4 字，重复出现次数越多说明段落开头越模板化 */
 function repeatedOpeningRatio(paragraphs: string[]) { const openings = paragraphs.map((paragraph) => paragraph.slice(0, 4)).filter((opening) => opening.length >= 2); return ratio(openings.length - new Set(openings).size, openings.length); }

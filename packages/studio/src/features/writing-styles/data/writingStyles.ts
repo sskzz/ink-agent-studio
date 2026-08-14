@@ -38,12 +38,13 @@ export interface AnalysisResult {
   parameters: StyleParameter[];
 }
 
-/** 写作风格（页面版）：含来源模板、指标摘要、分析结果与版本/样本统计。 */
+/** 写作风格（页面版）：初始模板由 seedSampleId 指向统一样本库；旧来源仅保留缺失提示。 */
 export interface WritingStyle {
   id: string;
   name: string;
   summary: string;
-  sourceFiles: string[];
+  seedSampleId?: string | null;
+  legacySourceFileName?: string | null;
   tags: string[];
   lastAnalyzed: string;
   metrics: {

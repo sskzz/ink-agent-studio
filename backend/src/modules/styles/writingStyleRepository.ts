@@ -4,6 +4,7 @@
  * 边界：不包含业务规则（校验在上层 service）；版本文件按内容寻址保存、写入幂等；删除样本只移出索引、保留原文件以支持历史哈希追踪。
  */
 import type { z } from "zod";
+import { rm } from "node:fs/promises";
 import {
   styleSamplesIndexSchema,
   styleVersionsIndexSchema,
@@ -84,6 +85,12 @@ export async function deleteWritingStyleSampleFile(paths: WorkspacePaths, styleI
   if (!samples.some((item) => item.id === sampleId)) throw notFound("写作风格样本不存在", { styleId, sampleId });
   await writeJsonFile(stylePaths.samplesIndexFile, samples.filter((item) => item.id !== sampleId));
   // 原始文件保留，已有不可变版本仍可通过哈希追踪；清理交由未来垃圾回收任务处理。
+}
+
+/** 永久删除一个风格的完整目录，包括样本正文、版本文件与编译缓存。 */
+export async function deleteWritingStyleStorage(paths: WorkspacePaths, styleId: string) {
+  const stylePaths = createWritingStylePaths(paths, styleId);
+  await rm(stylePaths.styleDir, { recursive: true, force: true });
 }
 
 /** 列出风格全部版本（索引记录）。 */

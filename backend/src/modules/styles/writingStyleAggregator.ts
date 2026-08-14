@@ -4,6 +4,7 @@
  * 边界：纯函数；只处理可用样本，异常值用 MAD 离群检测剔除；产出稳定度不足的度量在编译阶段会被降级为软约束。
  */
 import type { AggregateStyleProfile, WritingStyleSample } from "../../schemas/styleVersionSchemas.js";
+import { resolveWritingStyleSampleStatus } from "./writingStyleSampleQuality.js";
 
 /**
  * 聚合多篇样本为一份风格画像。
@@ -11,7 +12,7 @@ import type { AggregateStyleProfile, WritingStyleSample } from "../../schemas/st
  * @returns 聚合画像；每项度量带 preferredMin/Max 区间、稳定度与离群样本列表
  */
 export function aggregateWritingStyleSamples(samples: WritingStyleSample[]): AggregateStyleProfile {
-  const validSamples = samples.filter((sample) => sample.quality.usable);
+  const validSamples = samples.filter((sample) => resolveWritingStyleSampleStatus(sample.quality) === "accepted");
   const metricKeys = [...new Set(validSamples.flatMap((sample) => Object.keys(sample.featureProfile.metrics)))];
   const metrics: AggregateStyleProfile["metrics"] = {};
 
@@ -60,7 +61,7 @@ export function aggregateWritingStyleSamples(samples: WritingStyleSample[]): Agg
   const confidence = Math.round(Math.min(100, Math.min(1, validSamples.length / 3) * 35 + averageStability * 40 + quality * 25));
   const warnings: string[] = [];
   if (validSamples.length < 3) warnings.push("有效样本少于 3 篇，统计指标只能作为软约束。");
-  if (samples.some((sample) => !sample.quality.usable)) warnings.push("部分样本质量不足，未参与稳定画像计算。");
+  if (samples.some((sample) => resolveWritingStyleSampleStatus(sample.quality) !== "accepted")) warnings.push("部分样本质量不足，未参与稳定画像计算。");
   return {
     schemaVersion: "style-aggregate.v1",
     sampleCount: samples.length,
@@ -71,7 +72,7 @@ export function aggregateWritingStyleSamples(samples: WritingStyleSample[]): Agg
     metrics,
     acceptedSampleIds: validSamples.map((sample) => sample.id),
     weakSampleIds: [],
-    rejectedSampleIds: samples.filter((sample) => !sample.quality.usable).map((sample) => sample.id),
+    rejectedSampleIds: samples.filter((sample) => resolveWritingStyleSampleStatus(sample.quality) === "rejected").map((sample) => sample.id),
     warnings
   };
 }

@@ -4,6 +4,7 @@
  * 边界：纯函数；判据为质量规则、内容类型、质量权重与初步聚合的离群命中率；弱样本只能参与次要/场景化特征。
  */
 import type { AggregateStyleProfile, WritingStyleSample } from "../../schemas/styleVersionSchemas.js";
+import { resolveWritingStyleSampleStatus } from "./writingStyleSampleQuality.js";
 
 /** 样本分档结果；reasons 记录每个样本被分档的原因（去重后）。 */
 export interface StyleSampleSelection {
@@ -36,15 +37,16 @@ export function selectWritingStyleSamples(
 
   for (const sample of samples) {
     const sampleReasons = [...sample.quality.warnings];
+    const qualityStatus = resolveWritingStyleSampleStatus(sample.quality);
     // 分档逻辑：质量不可用 → 拒绝；权重过低 / 内容类型是大纲元数据 / 超过 30% 度量离群 → 降为弱证据；其余才可形成不可变规则
-    if (!sample.quality.usable) {
+    if (qualityStatus === "rejected") {
       sampleReasons.push("样本质量规则判定为不可用。");
       rejected.push(sample);
-    } else if (
+    } else if (qualityStatus === "weak" || (
       sample.quality.weight < 0.5
       || ["outline", "metadata", "unknown"].includes(sample.quality.detectedContentType)
       || (metricCount > 0 && (outlierCounts.get(sample.id) ?? 0) / metricCount > 0.3)
-    ) {
+    )) {
       sampleReasons.push("样本只能作为次要语义证据，不得形成不可变规则。");
       weak.push(sample);
     } else {

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import {
   analyzeWritingStyle,
   createWritingStyle,
+  deleteWritingStyle,
   getWritingStyle,
   listWritingStyles
 } from "../modules/styles/writingStyleService.js";
@@ -9,6 +10,7 @@ import {
   addStyleSample,
   getStyleSample,
   listStyleSamples,
+  reanalyzeStyleSamples,
   reanalyzeStyleSample,
   removeStyleSample
 } from "../modules/styles/writingStyleSampleService.js";
@@ -62,6 +64,18 @@ writingStylesRoute.get("/writing-styles/:styleId", async (context) => {
 });
 
 /**
+ * DELETE /api/v1/writing-styles/:styleId：永久删除风格及其样本、版本与缓存。
+ * 仍被作品引用时返回 409，避免产生失效引用。
+ */
+writingStylesRoute.delete("/writing-styles/:styleId", async (context) => {
+  return jsonOk(
+    context,
+    await deleteWritingStyle(paths(), context.req.param("styleId")),
+    "写作风格已删除"
+  );
+});
+
+/**
  * GET /api/v1/writing-styles/:styleId/samples：风格样本列表。
  */
 writingStylesRoute.get("/writing-styles/:styleId/samples", async (context) => {
@@ -99,6 +113,11 @@ writingStylesRoute.delete("/writing-styles/:styleId/samples/:sampleId", async (c
  */
 writingStylesRoute.post("/writing-styles/:styleId/samples/:sampleId/reanalyze", async (context) => {
   return jsonOk(context, await reanalyzeStyleSample(paths(), context.req.param("styleId"), context.req.param("sampleId")), "样本已重新分析");
+});
+
+/** POST /api/v1/writing-styles/:styleId/samples/reanalyze：按最新版规则重新质检全部样本。 */
+writingStylesRoute.post("/writing-styles/:styleId/samples/reanalyze", async (context) => {
+  return jsonOk(context, await reanalyzeStyleSamples(paths(), context.req.param("styleId")), "全部样本已重新分析");
 });
 
 /**

@@ -52,7 +52,7 @@ describe("extractWritingStyleFeatures", () => {
     expect(localStats.templatePatternDensity).toBeGreaterThan(0);
     expect(localStats.paragraphSummaryCandidateRatio).toBeGreaterThan(0);
     const profile = createWritingStyleFeatureProfile(localStats);
-    expect(profile.schemaVersion).toBe("style-features.v1");
+    expect(profile.schemaVersion).toBe("style-features.v2");
     expect(profile.metrics.averageSentenceLength).toBe(localStats.averageSentenceLength);
     expect(profile.metrics).not.toHaveProperty("sampledCharacterCount");
   });

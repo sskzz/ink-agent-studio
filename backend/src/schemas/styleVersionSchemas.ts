@@ -24,7 +24,20 @@ export const styleSampleQualitySchema = z.object({
   usable: z.boolean(),
   weight: z.number().min(0).max(1),
   detectedContentType: z.enum(["narrative", "script", "essay", "outline", "metadata", "unknown"]),
-  warnings: z.array(z.string())
+  warnings: z.array(z.string()),
+  qualityVersion: z.enum(["style-quality.v1", "style-quality.v2"]).optional(),
+  status: z.enum(["accepted", "weak", "rejected"]).optional(),
+  diagnostics: z.object({
+    headingRatio: z.number().min(0).max(1),
+    outlineLineRatio: z.number().min(0).max(1),
+    metadataLineRatio: z.number().min(0).max(1),
+    proseLineRatio: z.number().min(0).max(1),
+    proseCharacterRatio: z.number().min(0).max(1),
+    speakerLineRatio: z.number().min(0).max(1),
+    repeated12GramRatio: z.number().min(0).max(1),
+    duplicateParagraphRatio: z.number().min(0).max(1),
+    sampledCharacterCount: z.number().int().nonnegative()
+  }).optional()
 });
 
 /** 风格样本记录：保存特征画像与质量评估，供聚合生成版本。 */
@@ -38,6 +51,7 @@ export const writingStyleSampleSchema = z.object({
   featureVersion: z.string(),
   featureProfile: writingStyleFeatureProfileSchema,
   quality: styleSampleQualitySchema,
+  role: z.enum(["seed", "reference"]).optional(),
   createdAt: z.string(),
   updatedAt: z.string()
 });

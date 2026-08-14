@@ -23,6 +23,31 @@ afterEach(async () => {
 });
 
 describe("writing style sample and version routes", () => {
+  it("stores the initial template as the seed sample in the same create request", async () => {
+    const app = createApp();
+    const content = Array.from({ length: 40 }, (_, index) => `第${index + 1}章\n她在第${index + 1}次钟声响起时停住。窗外的风掠过旧街，她把钥匙放在桌边。`).join("\n");
+    const response = await app.request("/api/v1/writing-styles", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "初始模板入库",
+        summary: "测试",
+        parameters: {},
+        sampleFileName: "seed.txt",
+        seedSample: { fileName: "seed.txt", content }
+      })
+    });
+    expect(response.status).toBe(201);
+    const style = (await response.json()) as ApiPayload<{ id: string; seedSampleId: string; sampleCount: number }>;
+    expect(style.data.seedSampleId).toBeTruthy();
+    expect(style.data.sampleCount).toBe(1);
+    const listed = await app.request(`/api/v1/writing-styles/${style.data.id}/samples`);
+    const samples = (await listed.json()) as ApiPayload<Array<{ id: string; role?: string; fileName: string }>>;
+    expect(samples.data).toEqual([
+      expect.objectContaining({ id: style.data.seedSampleId, role: "seed", fileName: "seed.txt" })
+    ]);
+  });
+
   it("aggregates multiple samples into an immutable version and pins it to a book", async () => {
     const app = createApp();
     let response = await app.request("/api/v1/writing-styles", {

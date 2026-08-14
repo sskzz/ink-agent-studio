@@ -15,10 +15,12 @@ import {
   addWritingStyleSample,
   analyzeWritingStyle,
   createWritingStyle,
+  deleteWritingStyle,
   deleteWritingStyleSample,
   listWritingStyleSamples,
   listWritingStyleVersions,
   listWritingStyles,
+  reanalyzeWritingStyleSamples,
   rebuildWritingStyle
 } from "@/features/writing-styles/api/writingStylesApi";
 import type { WritingStyleSampleDto, WritingStyleVersionDto } from "@/features/writing-styles/api/writingStylesApi";
@@ -46,9 +48,13 @@ export function WritingStylesPage() {
   const [styleSamples, setStyleSamples] = useState<WritingStyleSampleDto[]>([]);
   const [styleVersions, setStyleVersions] = useState<WritingStyleVersionDto[]>([]);
   const [managingStyle, setManagingStyle] = useState(false);
+  const [deletingStyle, setDeletingStyle] = useState(false);
 
   const selectedStyle = styles.find((style) => style.id === selectedId) ?? styles[0];
-  const fileCount = styles.reduce((total, style) => total + style.sourceFiles.length, 0);
+  const acceptedSampleCount = styles.reduce(
+    (total, style) => total + (style.validSampleCount ?? style.sampleCount ?? 0),
+    0
+  );
   const analyzedCount = styles.filter((style) => style.analysis.parameters.length > 0).length;
 
   // 初始加载风格列表：ignore 标记避免组件卸载后仍 setState（严格模式双调用安全）。
@@ -181,7 +187,7 @@ export function WritingStylesPage() {
     }
   }
 
-  /** 保存风格：必须已有分析结果才允许保存；保存后同步首个样本文件并刷新列表。 */
+  /** 保存风格：初始模板正文随风格一次提交，后端原子地写入 seed 样本。 */
   async function saveStyle() {
     const trimmedName = styleName.trim();
     if (!analysisResult) {
@@ -203,11 +209,11 @@ export function WritingStylesPage() {
         parameters:
           result.rawParameters ?? Object.fromEntries(result.parameters.map((parameter) => [parameter.label, parameter.value])),
         sampleFileName: selectedFiles[0] ?? null,
-        analysis: result
+        analysis: result,
+        seedSample: sampleContent.trim() && selectedFiles[0]
+          ? { fileName: selectedFiles[0], content: sampleContent }
+          : undefined
       });
-      if (sampleContent.trim() && selectedFiles[0]) {
-        await addWritingStyleSample(savedStyle.id, { fileName: selectedFiles[0], content: sampleContent });
-      }
       const nextStyles = await listWritingStyles();
       setStyles(nextStyles);
       setSelectedId(savedStyle.id);
@@ -218,6 +224,26 @@ export function WritingStylesPage() {
     } finally {
       setSaving(false);
       setPendingAction(null);
+    }
+  }
+
+  /** 用最新版特征与质量规则重新分析全部已有样本。 */
+  async function reanalyzeSamples() {
+    if (!selectedStyle) return;
+    setManagingStyle(true);
+    try {
+      await reanalyzeWritingStyleSamples(selectedStyle.id);
+      const [samples, nextStyles] = await Promise.all([
+        listWritingStyleSamples(selectedStyle.id),
+        listWritingStyles()
+      ]);
+      setStyleSamples(samples);
+      setStyles(nextStyles);
+      setFeedback("全部样本已按最新版规则重新质检；请重建风格生成新版本。");
+    } catch (error) {
+      setFeedback(`重新质检样本失败：${toMessage(error)}`);
+    } finally {
+      setManagingStyle(false);
     }
   }
 
@@ -265,6 +291,27 @@ export function WritingStylesPage() {
       setFeedback(`删除样本失败：${toMessage(error)}`);
     } finally {
       setManagingStyle(false);
+    }
+  }
+
+  /** 永久删除当前风格；后端会阻止删除仍被作品引用的风格。 */
+  async function removeSelectedStyle() {
+    if (!selectedStyle) return;
+    const deletedName = selectedStyle.name;
+    setDeletingStyle(true);
+    try {
+      await deleteWritingStyle(selectedStyle.id);
+      const nextStyles = await listWritingStyles();
+      setStyles(nextStyles);
+      setSelectedId(nextStyles[0]?.id ?? "");
+      setStyleSamples([]);
+      setStyleVersions([]);
+      setView("list");
+      setFeedback(`写作风格“${deletedName}”及其全部样本和版本已删除。`);
+    } catch (error) {
+      setFeedback(`删除写作风格失败：${toMessage(error)}`);
+    } finally {
+      setDeletingStyle(false);
     }
   }
 
@@ -325,8 +372,8 @@ export function WritingStylesPage() {
           <strong>{styles.length}</strong>
         </article>
         <article>
-          <span>模板文件</span>
-          <strong>{fileCount}</strong>
+          <span>有效样本</span>
+          <strong>{acceptedSampleCount}</strong>
         </article>
         <article>
           <span>已分析</span>
@@ -366,11 +413,14 @@ export function WritingStylesPage() {
             samples={styleSamples}
             versions={styleVersions}
             managing={managingStyle}
+            deleting={deletingStyle}
             onAddSample={addSampleFile}
             onRemoveSample={removeSample}
             onRebuild={rebuildSelectedStyle}
+            onReanalyzeSamples={reanalyzeSamples}
             onActivateVersion={activateVersion}
             onCopyPrompt={copyPromptSnippet}
+            onDeleteStyle={removeSelectedStyle}
           />
         ) : null}
       </div>
@@ -469,7 +519,7 @@ function StyleListView({ styles, selectedId, onOpenDetail }: StyleListViewProps)
             </div>
 
             <div className="style-card-foot">
-              <span>{style.sourceFiles.length} 个模板文件</span>
+              <span>有效样本 {style.validSampleCount ?? style.sampleCount ?? 0} / 总样本 {style.sampleCount ?? 0}</span>
               <span>最近分析 {style.lastAnalyzed}</span>
             </div>
           </button>
@@ -520,7 +570,7 @@ function StyleCreateView({
           <div>
             <p className="eyebrow">New Style</p>
             <h3>新增风格页面</h3>
-            <p className="muted">通过本地文本模板收集样本，再交给 AI 分析生成风格结果。</p>
+            <p className="muted">选择一篇初始正文样本完成分析；保存风格后，它会直接进入样本库。</p>
           </div>
         </div>
 
@@ -544,7 +594,7 @@ function StyleCreateView({
           </label>
 
           <div className="field full">
-            <span>模板作品采集</span>
+            <span>初始风格样本</span>
             <div className="source-intake">
               <label className="source-upload-card">
                 <input
@@ -554,15 +604,15 @@ function StyleCreateView({
                   onChange={onFileChange}
                 />
                 <span className="source-upload-icon">TXT</span>
-                <strong>选择本地模板作品</strong>
-                <p>导入 TXT 或 Markdown 文本，内容会提交给后端分析并可保存为风格样本。</p>
+                <strong>选择本地样本作品</strong>
+                <p>导入 TXT 或 Markdown 正文；保存风格时会作为初始样本写入样本库。</p>
               </label>
             </div>
           </div>
 
           <div className="selected-source-strip">
             {selectedFiles.length === 0 ? (
-              <span className="empty-list">尚未添加模板来源。请选择本地 TXT 或 Markdown 文件。</span>
+              <span className="empty-list">尚未添加初始样本。请选择本地 TXT 或 Markdown 文件。</span>
             ) : null}
             {selectedFiles.map((fileName) => (
               <span key={fileName}>{fileName}</span>

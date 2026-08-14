@@ -32,7 +32,7 @@ const antiAiRuleSchema = z.object({
 
 /** 风格特征画像：样本的量化指标（句长、段落等），用于跨版本对比稳定性。 */
 export const writingStyleFeatureProfileSchema = z.object({
-  schemaVersion: z.literal("style-features.v1"),
+  schemaVersion: z.enum(["style-features.v1", "style-features.v2"]),
   sourceContentLength: z.number().int().nonnegative(),
   metrics: z.record(z.number().finite())
 });
@@ -116,6 +116,8 @@ export const writingStyleRecordSchema = z.object({
   sampleFileName: z.string().nullable(),
   analysis: writingStyleAnalysisSchema.optional(),
   featureProfile: writingStyleFeatureProfileSchema.optional(),
+  /** 初始模板在统一样本库中的 id；旧数据可能只有 sampleFileName。 */
+  seedSampleId: z.string().nullable().optional(),
   latestVersionId: z.string().nullable().optional(),
   sampleCount: z.number().int().nonnegative().optional(),
   validSampleCount: z.number().int().nonnegative().optional(),
@@ -134,7 +136,11 @@ export const writingStyleCreateInputSchema = z.object({
   parameters: z.record(z.unknown()).optional().default({}),
   sampleFileName: z.string().nullable().optional().default(null),
   analysis: writingStyleAnalysisSchema.optional(),
-  featureProfile: writingStyleFeatureProfileSchema.optional()
+  featureProfile: writingStyleFeatureProfileSchema.optional(),
+  seedSample: z.object({
+    fileName: z.string().trim().min(1),
+    content: z.string().min(1)
+  }).optional()
 });
 
 /** 风格分析请求入参：content 为模板作品样本正文，必填。 */
