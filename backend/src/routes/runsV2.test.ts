@@ -23,7 +23,7 @@ afterEach(async () => {
   tempRoot = null;
 });
 
-async function createTestApp(options: { replayLimit?: number; handler?: RunCommandHandler } = {}) {
+async function createTestApp(options: { replayLimit?: number; handler?: RunCommandHandler; continueHandler?: RunCommandHandler } = {}) {
   tempRoot = await mkdtemp(path.join(os.tmpdir(), "ink-agent-runs-route-"));
   const paths = createWorkspacePaths(tempRoot);
   await ensureWorkspace(paths);
@@ -42,11 +42,12 @@ async function createTestApp(options: { replayLimit?: number; handler?: RunComma
     backupBeforeMigration: false
   });
   services.runCoordinator = new RunCoordinator(services.configService, services.runEventStore, {
-    continue_chapter: async (context) => {
+    continue_chapter: options.continueHandler ?? (async (context) => {
       context.setStage("generate");
       context.emitDelta("第一段");
+      context.saveArtifact("chapter-draft.v1", { draft: "第一段" });
       return { draft: "第一段" };
-    },
+    }),
     ...(options.handler ? { initialize_book: options.handler } : {})
   });
   return createApp(services);
@@ -93,6 +94,12 @@ describe("Run V2 routes", () => {
     response = await app.request(`/api/v1/runs/${accepted.data.runId}/model-attempts`);
     const attempts = (await response.json()) as { data: unknown[] };
     expect(attempts.data).toEqual([]);
+
+    response = await app.request(`/api/v1/runs/${accepted.data.runId}/artifacts`);
+    const artifacts = (await response.json()) as { data: Array<{ artifactType: string; inlineJson: unknown }> };
+    expect(artifacts.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ artifactType: "chapter-draft.v1", inlineJson: { draft: "第一段" } })
+    ]));
 
     response = await app.request(accepted.data.eventsUrl);
     const replay = await response.text();
@@ -165,5 +172,36 @@ describe("Run V2 routes", () => {
     expect(replay.indexOf("event: run_failed")).toBeGreaterThanOrEqual(0);
     expect(replay.lastIndexOf("event: run_queued")).toBeGreaterThan(replay.indexOf("event: run_failed"));
     expect(replay).toContain("event: run_completed");
+  });
+
+  it("retries a failed run through the public route and reuses its artifact", async () => {
+    let invocation = 0;
+    const app = await createTestApp({
+      continueHandler: async (context) => {
+        invocation += 1;
+        if (invocation === 1) {
+          context.saveArtifact("retry-state.v1", { prepared: true });
+          throw new Error("首次失败");
+        }
+        return { restored: context.loadArtifact("retry-state.v1")?.value };
+      }
+    });
+    let response = await app.request("/api/v1/runs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(requestBody())
+    });
+    const accepted = (await response.json()) as { data: { runId: string } };
+    await services!.runCoordinator.waitForIdle();
+    expect(services!.runEventStore.getRun(accepted.data.runId).status).toBe("failed");
+
+    response = await app.request(`/api/v1/runs/${accepted.data.runId}/retry`, { method: "POST" });
+    expect(response.status).toBe(202);
+    await services!.runCoordinator.waitForIdle();
+    expect(services!.runEventStore.getRun(accepted.data.runId)).toMatchObject({
+      status: "completed",
+      output: { restored: { prepared: true } }
+    });
+    expect(invocation).toBe(2);
   });
 });

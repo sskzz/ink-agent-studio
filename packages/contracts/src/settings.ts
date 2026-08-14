@@ -20,7 +20,7 @@ const contextBudgetsSchema = z.object({
   recentMaxTokens: z.number().int().positive(), // 最近对话区
   sessionMaxTokens: z.number().int().positive(), // 会话历史区
   skillsMaxTokens: z.number().int().positive(), // 技能区
-  turnMinTokens: z.number().int().positive() // 单轮输出保留的最小余量
+  turnMinTokens: z.number().int().positive() // 本轮用户指令输入层预算（兼容旧字段名）
 }).strict();
 
 /**
@@ -72,7 +72,22 @@ export const appConfigSectionsSchema = z.object({
     enabled: z.boolean(),
     writeApprovalRequired: z.literal(true), // 安全约束：记忆写入必须审批，禁止关闭
     promptTokenBudget: z.number().int().min(128).max(16_000),
-    maxActiveEntries: z.number().int().min(1).max(1_000)
+    maxActiveEntries: z.number().int().min(1).max(1_000),
+    embedding: z.object({
+      enabled: z.boolean().default(true),
+      provider: z.literal("local-bge-small-zh").default("local-bge-small-zh"),
+      modelId: z.string().trim().min(1).default("Xenova/bge-small-zh-v1.5"),
+      dimensions: z.number().int().min(1).max(4_096).default(512),
+      autoDownload: z.boolean().default(false),
+      candidateLimit: z.number().int().min(10).max(2_000).default(1_000)
+    }).strict().default({
+      enabled: true,
+      provider: "local-bge-small-zh",
+      modelId: "Xenova/bge-small-zh-v1.5",
+      dimensions: 512,
+      autoDownload: false,
+      candidateLimit: 1_000
+    })
   }).strict(),
   skills: z.object({
     enabled: z.boolean(),

@@ -6,6 +6,10 @@ import {
   runWithModelExecutionContext,
   setActiveModelExecutionStage
 } from "../ai/modelExecutionContext.js";
+import { ConfigRepository } from "../../config/configRepository.js";
+import type { WorkspacePaths } from "../workspace/workspacePaths.js";
+import { withStoryStateEvents } from "../books/storyStateEventRepository.js";
+import { enqueueNextChapterStateObservation } from "../books/chapterService.js";
 
 export interface RunExecutionContext {
   runId: string;
@@ -17,6 +21,10 @@ export interface RunExecutionContext {
   saveArtifact(artifactType: string, value: unknown): { id: string; contentHash: string };
   loadArtifact(artifactType: string): { id: string; contentHash: string; value: unknown } | null;
   saveCheckpoint(stage: string, checkpoint: unknown, resumable?: boolean): { id: string };
+  /** 把非网关或多段模型用量写入可审计 Artifact；实际调用仍由 model_attempts 记录。 */
+  addTokenUsage?(key: string, value: unknown): void;
+  /** 保存管线级 trace 增量，避免扩大 runs 表结构。 */
+  mergeTrace?(value: Record<string, unknown>): void;
   /** Marks an irreversible workflow commit so a later cancellation request cannot misreport committed data as cancelled. */
   markCommitted?(): void;
 }
@@ -37,6 +45,11 @@ interface ActiveRun extends QueuedRun {
   promise: Promise<void>;
 }
 
+const requiredWorkflowTypes = new Set<RunCommand["type"]>([
+  "initialize_book",
+  "generate_story_plan_batch"
+]);
+
 /**
  * 进程内协调器管理有界队列和 AbortController，持久状态全部写入 RunEventStore。服务重启后
  * 内存队列不会伪装成仍在运行，recoverInterruptedRuns 会先将遗留任务标为 interrupted。
@@ -52,8 +65,12 @@ export class RunCoordinator {
   constructor(
     private readonly configProvider: ConfigProvider,
     private readonly eventStore: RunEventStore,
-    private readonly handlers: Partial<Record<RunCommand["type"], RunCommandHandler>>
+  private handlers: Partial<Record<RunCommand["type"], RunCommandHandler>>
   ) {}
+
+  setHandlers(handlers: Partial<Record<RunCommand["type"], RunCommandHandler>>) {
+    this.handlers = handlers;
+  }
 
   async enqueue(
     commandInput: RunCommand,
@@ -102,12 +119,17 @@ export class RunCoordinator {
     return this.resumePersistedRun(runId, false);
   }
 
+  /** 显式重试失败/取消/中断的普通 Run，并复用同一 Run 下的 Artifact 与检查点。 */
+  async retry(runId: string) {
+    return this.resumePersistedRun(runId, false, true);
+  }
+
   /** Required product workflows may retry a failed durable run and reuse its validated stage artifacts. */
   async resumeSystem(runId: string) {
     return this.resumePersistedRun(runId, true);
   }
 
-  private async resumePersistedRun(runId: string, requiredWorkflow: boolean) {
+  private async resumePersistedRun(runId: string, requiredWorkflow: boolean, retry = false) {
     if (this.shuttingDown) throw conflict("后端正在关闭，不能恢复运行");
     const effective = await this.configProvider.getEffective();
     if (!requiredWorkflow && !effective.effectiveConfig.features.asyncRuns) {
@@ -115,9 +137,9 @@ export class RunCoordinator {
     }
     this.assertQueueCapacity(effective);
     const snapshot = this.eventStore.getRun(runId);
-    const allowedStatuses = requiredWorkflow ? ["interrupted", "failed", "cancelled"] : ["interrupted"];
+    const allowedStatuses = requiredWorkflow || retry ? ["interrupted", "failed", "cancelled"] : ["interrupted"];
     if (!allowedStatuses.includes(snapshot.status)) {
-      throw conflict(requiredWorkflow ? "只有 interrupted、failed 或 cancelled 系统运行可以恢复" : "只有 interrupted 运行可以恢复", {
+      throw conflict(requiredWorkflow || retry ? "只有 interrupted、failed 或 cancelled 运行可以重试" : "只有 interrupted 运行可以恢复", {
         runId,
         status: snapshot.status
       });
@@ -126,8 +148,8 @@ export class RunCoordinator {
     if (!command.success) {
       throw conflict("旧版导入运行不能自动恢复", { runId });
     }
-    if (requiredWorkflow && command.data.type !== "initialize_book") {
-      throw conflict("只有作品初始化运行可以作为系统任务恢复", { runId, commandType: command.data.type });
+    if (requiredWorkflow && !requiredWorkflowTypes.has(command.data.type)) {
+      throw conflict("该运行不属于可自动恢复的系统工作流", { runId, commandType: command.data.type });
     }
 
     this.eventStore.appendEvent(runId, { type: "run_queued", payload: { resumed: true, fromStatus: snapshot.status } });
@@ -190,7 +212,7 @@ export class RunCoordinator {
 
   async recoverAndResumeRequiredWorkflows() {
     const unfinished = this.eventStore.listRunsByStatus(["queued", "running", "cancelling"]);
-    const resumable = unfinished.filter((run) => run.command.type === "initialize_book");
+    const resumable = unfinished.filter((run) => requiredWorkflowTypes.has(run.command.type as RunCommand["type"]));
     const interrupted = this.recoverInterruptedRuns();
     const resumedRunIds: string[] = [];
     const failures: Array<{ runId: string; error: ReturnType<typeof serializeError> }> = [];
@@ -205,6 +227,28 @@ export class RunCoordinator {
     }
 
     return { interrupted, resumedRunIds, failures };
+  }
+
+  /** 重启后从持久化 outbox 恢复章节状态观察任务，保证正文保存与状态物化最终一致。 */
+  async recoverChapterStateObservations(paths: WorkspacePaths) {
+    const config = await new ConfigRepository(paths).readOrCreate();
+    const pending = await withStoryStateEvents(paths, config, (events) => {
+      events.resetRecoverableObservations();
+      return events.listRecoverableObservations();
+    });
+    const resumedRunIds: string[] = [];
+    const failures: Array<{ bookId: string; chapterId: string; error: ReturnType<typeof serializeError> }> = [];
+    const firstByBook = new Map<string, typeof pending[number]>();
+    for (const item of pending) if (!firstByBook.has(item.bookId)) firstByBook.set(item.bookId, item);
+    for (const item of firstByBook.values()) {
+      try {
+        const run = await enqueueNextChapterStateObservation(paths, this, item.bookId);
+        if (run) resumedRunIds.push(run.runId);
+      } catch (error) {
+        failures.push({ bookId: item.bookId, chapterId: item.chapterId, error: serializeError(error) });
+      }
+    }
+    return { resumedRunIds, failures };
   }
 
   async shutdown(graceMs: number) {
@@ -344,6 +388,16 @@ export class RunCoordinator {
           saveCheckpoint: (stage, checkpoint, resumable = true) => {
             const saved = this.eventStore.saveCheckpoint(active.runId, { stage, checkpoint, resumable });
             return { id: saved.id };
+          },
+          addTokenUsage: (key, value) => {
+            this.eventStore.saveInlineArtifact(active.runId, { artifactType: `token-usage.${key}.v1`, value });
+          },
+          mergeTrace: (value) => {
+            const previous = this.eventStore.getLatestInlineArtifact(active.runId, "pipeline-trace.v1")?.inlineJson;
+            this.eventStore.saveInlineArtifact(active.runId, {
+              artifactType: "pipeline-trace.v1",
+              value: { ...(previous && typeof previous === "object" ? previous : {}), ...value }
+            });
           },
           markCommitted: () => {
             committed = true;

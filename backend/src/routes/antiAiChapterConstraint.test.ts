@@ -50,7 +50,7 @@ describe("global anti-ai chapter constraint", () => {
     response = await app.request(`/api/v1/books/${bookId}/chapters`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "第一章", content: "门外传来脚步声。" })
+      body: JSON.stringify({ title: "第一章", outline: "她听见门外脚步，判断来者并采取行动。", content: "门外传来脚步声。" })
     });
     const chapterId = ((await response.json()) as Payload<{ id: string }>).data.id;
 

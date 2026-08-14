@@ -1,4 +1,5 @@
 import path from "node:path";
+import { rm } from "node:fs/promises";
 import { z } from "zod";
 import type { ModelGenerateTextInput, ModelGenerateTextResult } from "../ai/types.js";
 import { generateModelTextWithFallback } from "../ai/modelGateway.js";
@@ -16,10 +17,17 @@ import {
   restoreEntityStorageSnapshot,
   type GeneratedEntityInput
 } from "../books/entityService.js";
+import {
+  createInitialStoryPlan,
+  createInitialWorldRuleRegistry,
+  normalizeCharacterProfile,
+  writeStoryPlan,
+  writeWorldRuleRegistry
+} from "../books/storyKnowledgeRepository.js";
 import { listWritingStyles } from "../styles/writingStyleService.js";
 import type { BookRecord, ModelConfigRecord } from "../../types/domain.js";
 import type { WorkspacePaths } from "../workspace/workspacePaths.js";
-import { ensureDirectory } from "../../utils/fileStore.js";
+import { ensureDirectory, pathExists, readTextFile, writeTextFileAtomic } from "../../utils/fileStore.js";
 import { writeJsonFile } from "../../utils/jsonStore.js";
 import type { RunExecutionContext } from "./runCoordinator.js";
 import { writeFactCards } from "../books/factRepository.js";
@@ -57,6 +65,7 @@ import {
   verifyRequirementsBackboneConsistency,
   verifySupportingBackboneConsistency
 } from "./initializationFacts.js";
+import { createBookPaths } from "../books/bookPaths.js";
 
 const identifierSchema = z.string().regex(/^[a-z][a-z0-9-]{2,63}$/);
 const shortText = z.string().trim().min(1).max(500);
@@ -118,7 +127,17 @@ const characterSchema = z.object({
   motivation: shortText,
   weakness: shortText,
   arc: shortText,
-  factionIds: z.array(identifierSchema).max(5)
+  factionIds: z.array(identifierSchema).max(5),
+  /** 五层角色模型的可选生成字段；旧模型响应不含这些字段时由归一化器补空值。 */
+  appearance: z.string().trim().max(500).optional(),
+  personalityTraits: z.array(shortText).max(12).optional(),
+  values: z.array(shortText).max(12).optional(),
+  prohibitedActions: z.array(shortText).max(12).optional(),
+  voice: z.string().trim().max(300).optional(),
+  sentenceRhythm: z.string().trim().max(200).optional(),
+  signaturePhrases: z.array(z.string().trim().min(1).max(100)).max(12).optional(),
+  forbiddenExpressions: z.array(z.string().trim().min(1).max(100)).max(20).optional(),
+  subtextHabits: z.array(shortText).max(12).optional()
 });
 
 const factionSchema = z.object({
@@ -259,7 +278,12 @@ const stateBundleSchema = z.object({
     relatedEntityIds: z.array(identifierSchema).max(8),
     placement: shortText,
     resolution: shortText,
-    status: z.enum(["planned", "planted", "resolving", "resolved"])
+    status: z.enum(["planned", "planted", "resolving", "resolved"]),
+    horizon: z.enum(["short", "long"]).optional(),
+    targetChapterRange: z.object({
+      start: z.number().int().min(1).max(1_000),
+      end: z.number().int().min(1).max(1_000)
+    }).optional()
   })).min(1).max(40)
 });
 
@@ -438,7 +462,7 @@ export async function initializeBookWithAi(
 
     const state = await runStage(context, "initial_state", stateBundleSchema, models.planning, generate, paths, {
       system: commonSystemPrompt("小说初始状态与伏笔规划"),
-      user: appendRepairIssues(appendFactContext(`【开场事件（storyStart 只能扩写以下事件，不得增加骨架中不存在的新人物身份、地点设定、数字或事件；伏笔引用事件时写明事件标题或 ke-卷号-序号 id）】\n${renderStartEvents(backbone)}\n\n【伏笔池规划要求（伏笔池是全书唯一的长线伏笔体系，覆盖故事开篇到结局卷：每条伏笔须在投放计划与回收计划中标注所属卷号或 ke-卷号-序号 事件引用，投放必须早于回收；须包含跨卷投放与回收的长线伏笔，且整体覆盖到结局卷；开场已埋设的伏笔 status 用 planted，其余用 planned）】\n\n【可引用实体 ID（characterStates/factionStates/itemStates/relatedEntityIds 只能引用以下 ID，不得发明新 ID）】\n${entityRegistry}\n\n生成故事开篇时的权威状态和伏笔池。所有实体引用必须存在，投放与回收计划中引用的骨架事件必须真实存在；时间线骨架 startEvents 中已经发生的事件不得重复安排。只输出 book-initial-state.v1 JSON。\n${stringifyPrompt({ foundation: normalizedFoundation, world, storyGraph, backbone, outline, supporting, items }, 40_000, ["backbone", "supporting", "outline", "items"])}`, [...outlineFacts, ...supportingFacts, ...itemsFacts]), issues),
+      user: appendRepairIssues(appendFactContext(`【开场事件（storyStart 只能扩写以下事件，不得增加骨架中不存在的新人物身份、地点设定、数字或事件；伏笔引用事件时写明事件标题或 ke-卷号-序号 id）】\n${renderStartEvents(backbone)}\n\n【伏笔池规划要求（伏笔池是全书唯一体系，按 horizon 区分 long/short：长线须跨章或跨卷，短线须在邻近章节回收；每条伏笔须在投放计划与回收计划中标注所属卷号或 ke-卷号-序号事件引用，能确定章节时必须填写 targetChapterRange，范围为 1-${outline.estimatedChapters}；投放必须早于回收；须包含跨卷长线伏笔并覆盖结局卷；开场已埋设的伏笔 status 用 planted，其余用 planned）】\n\n【可引用实体 ID（characterStates/factionStates/itemStates/relatedEntityIds 只能引用以下 ID，不得发明新 ID）】\n${entityRegistry}\n\n生成故事开篇时的权威状态和伏笔池。所有实体引用必须存在，投放与回收计划中引用的骨架事件必须真实存在；时间线骨架 startEvents 中已经发生的事件不得重复安排。只输出 book-initial-state.v1 JSON。\n${stringifyPrompt({ foundation: normalizedFoundation, world, storyGraph, backbone, outline, supporting, items }, 40_000, ["backbone", "supporting", "outline", "items"])}`, [...outlineFacts, ...supportingFacts, ...itemsFacts]), issues),
       maxTokens: 5_500
     }, { forceRegenerate: forceState });
 
@@ -830,6 +854,18 @@ async function applyInitializationBundle(
     }
   }
   const entitySnapshot = await captureEntityStorageSnapshot(paths, originalBook.id);
+  const bookPaths = createBookPaths(paths, originalBook.id);
+  const derivedStateFiles = [
+    bookPaths.runtimeStateFile,
+    bookPaths.storyPlanFile,
+    bookPaths.worldRulesFile,
+    bookPaths.authorIntentFile,
+    bookPaths.currentFocusFile
+  ];
+  const derivedStateSnapshot = await Promise.all(derivedStateFiles.map(async (filePath) => ({
+    filePath,
+    content: await pathExists(filePath) ? await readTextFile(filePath) : null
+  })));
   signal.throwIfAborted();
   const backupDir = path.join(paths.backupsDir, "initializations", originalBook.id);
   await ensureDirectory(backupDir);
@@ -895,6 +931,35 @@ async function applyInitializationBundle(
     signal.throwIfAborted();
     await writeFactCards(paths, originalBook.id, factCards);
     signal.throwIfAborted();
+    // 三层大纲权威源：初始化写入书/卷/批次壳，章级五维按 20 章批次延迟生成。
+    await writeStoryPlan(paths, originalBook.id, createInitialStoryPlan(originalBook.id, {
+      mainLine: bundle.outline.mainLine,
+      estimatedChapters: bundle.outline.estimatedChapters,
+      volumes: bundle.outline.volumes,
+      terms: [
+        ...generatedEntities.map((entity) => ({ id: entity.id, term: entity.name, category: entity.entityType as "character" | "faction" | "location" | "item" })),
+        ...bundle.world.rules.map((rule, index) => ({ id: `world-rule-${String(index + 1).padStart(2, "0")}`, term: rule.name, category: "rule" as const })),
+        ...bundle.backbone.keyEvents.map((event) => ({ id: event.id, term: event.title, category: "event" as const }))
+      ]
+    }));
+    signal.throwIfAborted();
+    await writeWorldRuleRegistry(paths, originalBook.id, createInitialWorldRuleRegistry(originalBook.id, [
+      ...bundle.world.rules.map((rule, index) => ({
+        id: `world-rule-${String(index + 1).padStart(2, "0")}`,
+        title: rule.name,
+        content: `${rule.description}；限制：${rule.limitation}；代价：${rule.cost}`,
+        category: "law" as const,
+        mutability: "immutable" as const
+      })),
+      ...bundle.world.history.map((history, index) => ({
+        id: `world-history-${String(index + 1).padStart(2, "0")}`,
+        title: `历史 ${index + 1}`,
+        content: history,
+        category: "history" as const,
+        mutability: "immutable" as const
+      }))
+    ]));
+    signal.throwIfAborted();
     // 权威运行时状态：初始化产出作为 baseline 落盘，后续章节 delta 在其上重放合成
     await writeRuntimeState(paths, originalBook.id, createBaselineRuntimeState(bundle.state));
     signal.throwIfAborted();
@@ -907,7 +972,11 @@ async function applyInitializationBundle(
     const rollback = await Promise.allSettled([
       restoreBookFilesSnapshot(paths, originalBook.id, fileSnapshot),
       saveBook(paths, originalBook),
-      restoreEntityStorageSnapshot(paths, originalBook.id, entitySnapshot, generatedEntities)
+      restoreEntityStorageSnapshot(paths, originalBook.id, entitySnapshot, generatedEntities),
+      ...derivedStateSnapshot.map(async ({ filePath, content }) => {
+        if (content === null) await rm(filePath, { force: true });
+        else await writeTextFileAtomic(filePath, content);
+      })
     ]);
     const rollbackErrors = rollback
       .filter((result): result is PromiseRejectedResult => result.status === "rejected")
@@ -951,7 +1020,13 @@ function toGeneratedEntities(bundle: InitializationBundle): GeneratedEntityInput
     name: item.name,
     role: item.role,
     description: `${item.identity}；目标：${item.goal}；动机：${item.motivation}；弱点：${item.weakness}；成长：${item.arc}`,
-    attributes: item
+    attributes: {
+      ...item,
+      profile: normalizeCharacterProfile(item, {
+        description: `${item.identity}；目标：${item.goal}；动机：${item.motivation}；弱点：${item.weakness}；成长：${item.arc}`,
+        state: bundle.state.characterStates.find((state) => state.characterId === item.id)?.state
+      })
+    }
   }));
   const factions = bundle.storyGraph.factions.map((item) => ({
     id: item.id,

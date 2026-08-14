@@ -1,5 +1,5 @@
 /**
- * 章节细纲规划器单测：schema 校验、模型输出解析、降级与渲染。
+ * 章节细纲规划器单测：schema 校验、模型输出解析、JSON 修复、强制失败与渲染。
  */
 import { mkdtemp, rm } from "node:fs/promises";
 import http from "node:http";
@@ -170,16 +170,15 @@ describe("renderChapterOutline", () => {
 });
 
 describe("planChapterOutline", () => {
-  it("无写作模型路由时返回 null（降级）", async () => {
+  it("无写作模型路由时拒绝继续生成正文", async () => {
     const paths = await createFixture();
-    const plan = await planChapterOutline(paths, {
+    await expect(planChapterOutline(paths, {
       chapterTitle: "第一章",
       chapterOutline: "",
       instruction: "继续",
       currentFocus: "",
       runtimeState
-    });
-    expect(plan).toBeNull();
+    })).rejects.toThrow("无法生成章节细纲");
   });
 
   it("模型返回合法细纲时解析并归一化输出", async () => {
@@ -207,12 +206,11 @@ describe("planChapterOutline", () => {
       bookMetadata
     });
 
-    expect(plan).not.toBeNull();
-    expect(plan!.scenes).toHaveLength(1);
-    expect(plan!.scenes[0].events).toHaveLength(3);
-    expect(plan!.foreshadowing[0]).toEqual({ item: "hook-chen", action: "advance", note: "推进陈栀隐藏注记伏笔" });
+    expect(plan.scenes).toHaveLength(1);
+    expect(plan.scenes[0].events).toHaveLength(3);
+    expect(plan.foreshadowing[0]).toEqual({ item: "hook-chen", action: "advance", note: "推进陈栀隐藏注记伏笔" });
     // item 缺省归一化为 null
-    expect(plan!.foreshadowing[1]).toEqual({ item: null, action: "plant", note: "植入苏见能力的副作用暗示" });
+    expect(plan.foreshadowing[1]).toEqual({ item: null, action: "plant", note: "植入苏见能力的副作用暗示" });
     // 伏笔池输入只列待推进条目：已回收的 hook-resolved 不进入 prompt
     expect(receivedUserPrompt).toContain("hook-chen");
     expect(receivedUserPrompt).toContain("hook-clean");
@@ -221,11 +219,32 @@ describe("planChapterOutline", () => {
     expect(receivedUserPrompt).toContain("主角：苏见（性别：男）");
   });
 
-  it("模型返回非法内容时返回 null（降级不阻断）", async () => {
+  it("模型与修复请求都返回非法内容时拒绝继续生成正文", async () => {
     const paths = await createFixture();
     const url = await listen((_request, response) => {
       response.setHeader("Content-Type", "application/json");
       response.end(ok("这不是 JSON"));
+    });
+    const writing = model("writing", url);
+    await writeJsonFile(paths.modelConfigsFile, [writing]);
+    await writeJsonFile(paths.modelRoutesFile, { writingModelId: writing.id, reviewModelId: null, planningModelId: null });
+
+    await expect(planChapterOutline(paths, {
+      chapterTitle: "第一章",
+      chapterOutline: "",
+      instruction: "",
+      currentFocus: "",
+      runtimeState
+    })).rejects.toThrow("修复后仍未通过校验");
+  });
+
+  it("首次输出非法时允许一次低温 JSON 修复", async () => {
+    const paths = await createFixture();
+    let requestCount = 0;
+    const url = await listen((_request, response) => {
+      requestCount += 1;
+      response.setHeader("Content-Type", "application/json");
+      response.end(ok(requestCount === 1 ? "非法输出" : JSON.stringify(validOutline)));
     });
     const writing = model("writing", url);
     await writeJsonFile(paths.modelConfigsFile, [writing]);
@@ -238,6 +257,8 @@ describe("planChapterOutline", () => {
       currentFocus: "",
       runtimeState
     });
-    expect(plan).toBeNull();
+
+    expect(plan.summary).toBe(validOutline.summary);
+    expect(requestCount).toBe(2);
   });
 });

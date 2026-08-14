@@ -404,6 +404,143 @@ export const runtimeMigrations: RuntimeMigration[] = [
 
       CREATE INDEX chapter_memory_chapter_no_idx ON chapter_memory(chapter_no DESC);
     `
+  },
+  {
+    version: 10,
+    name: "isolate_chapter_memory_and_add_story_state_events",
+    sql: `
+      DROP INDEX IF EXISTS chapter_memory_chapter_no_idx;
+      DROP TABLE IF EXISTS chapter_memory;
+
+      CREATE TABLE chapter_memory (
+        book_id TEXT NOT NULL,
+        chapter_id TEXT NOT NULL,
+        chapter_no INTEGER NOT NULL CHECK (chapter_no >= 1),
+        chapter_revision INTEGER NOT NULL CHECK (chapter_revision >= 1),
+        content_hash TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        entities_json TEXT NOT NULL CHECK (json_valid(entities_json)),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (book_id, chapter_id)
+      ) STRICT;
+
+      CREATE INDEX chapter_memory_book_chapter_no_idx
+      ON chapter_memory(book_id, chapter_no DESC);
+
+      CREATE TABLE story_state_events (
+        book_id TEXT NOT NULL,
+        chapter_id TEXT NOT NULL,
+        chapter_no INTEGER NOT NULL CHECK (chapter_no >= 1),
+        chapter_revision INTEGER NOT NULL CHECK (chapter_revision >= 1),
+        observation_revision INTEGER NOT NULL CHECK (observation_revision >= 1),
+        content_hash TEXT NOT NULL,
+        delta_json TEXT NOT NULL CHECK (json_valid(delta_json)),
+        source_run_id TEXT,
+        recorded_at TEXT NOT NULL,
+        PRIMARY KEY (book_id, chapter_id)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX story_state_events_story_order_idx
+      ON story_state_events(book_id, chapter_no, chapter_id);
+
+      CREATE TABLE chapter_state_outbox (
+        book_id TEXT NOT NULL,
+        chapter_id TEXT NOT NULL,
+        chapter_no INTEGER NOT NULL CHECK (chapter_no >= 1),
+        chapter_revision INTEGER NOT NULL CHECK (chapter_revision >= 1),
+        content_hash TEXT NOT NULL,
+        source_run_id TEXT,
+        observation_run_id TEXT,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'synced', 'failed', 'stale')),
+        attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+        error_message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        synced_at TEXT,
+        PRIMARY KEY (book_id, chapter_id)
+      ) STRICT;
+
+      CREATE INDEX chapter_state_outbox_status_idx
+      ON chapter_state_outbox(status, updated_at);
+    `
+  },
+  {
+    version: 11,
+    name: "add_three_layer_chapter_memory_and_fts",
+    sql: `
+      ALTER TABLE chapter_memory ADD COLUMN raw_text TEXT NOT NULL DEFAULT '';
+      ALTER TABLE chapter_memory ADD COLUMN synthesized_text TEXT NOT NULL DEFAULT '';
+
+      CREATE VIRTUAL TABLE chapter_memory_fts USING fts5(
+        book_id UNINDEXED,
+        chapter_id UNINDEXED,
+        summary,
+        synthesized_text,
+        tokenize = 'trigram'
+      );
+
+      INSERT INTO chapter_memory_fts(rowid, book_id, chapter_id, summary, synthesized_text)
+      SELECT rowid, book_id, chapter_id, summary, synthesized_text FROM chapter_memory;
+
+      CREATE TRIGGER chapter_memory_fts_insert AFTER INSERT ON chapter_memory BEGIN
+        INSERT INTO chapter_memory_fts(rowid, book_id, chapter_id, summary, synthesized_text)
+        VALUES (new.rowid, new.book_id, new.chapter_id, new.summary, new.synthesized_text);
+      END;
+      CREATE TRIGGER chapter_memory_fts_delete AFTER DELETE ON chapter_memory BEGIN
+        INSERT INTO chapter_memory_fts(chapter_memory_fts, rowid, book_id, chapter_id, summary, synthesized_text)
+        VALUES ('delete', old.rowid, old.book_id, old.chapter_id, old.summary, old.synthesized_text);
+      END;
+      CREATE TRIGGER chapter_memory_fts_update AFTER UPDATE OF book_id, chapter_id, summary, synthesized_text ON chapter_memory BEGIN
+        INSERT INTO chapter_memory_fts(chapter_memory_fts, rowid, book_id, chapter_id, summary, synthesized_text)
+        VALUES ('delete', old.rowid, old.book_id, old.chapter_id, old.summary, old.synthesized_text);
+        INSERT INTO chapter_memory_fts(rowid, book_id, chapter_id, summary, synthesized_text)
+        VALUES (new.rowid, new.book_id, new.chapter_id, new.summary, new.synthesized_text);
+      END;
+    `
+  }
+  ,{
+    version: 12,
+    name: "repair_chapter_memory_fts_sync_triggers",
+    sql: `
+      DROP TRIGGER IF EXISTS chapter_memory_fts_insert;
+      DROP TRIGGER IF EXISTS chapter_memory_fts_delete;
+      DROP TRIGGER IF EXISTS chapter_memory_fts_update;
+
+      CREATE TRIGGER chapter_memory_fts_insert AFTER INSERT ON chapter_memory BEGIN
+        INSERT INTO chapter_memory_fts(rowid, book_id, chapter_id, summary, synthesized_text)
+        VALUES (new.rowid, new.book_id, new.chapter_id, new.summary, new.synthesized_text);
+      END;
+      CREATE TRIGGER chapter_memory_fts_delete AFTER DELETE ON chapter_memory BEGIN
+        DELETE FROM chapter_memory_fts WHERE rowid = old.rowid;
+      END;
+      CREATE TRIGGER chapter_memory_fts_update AFTER UPDATE OF book_id, chapter_id, summary, synthesized_text ON chapter_memory BEGIN
+        DELETE FROM chapter_memory_fts WHERE rowid = old.rowid;
+        INSERT INTO chapter_memory_fts(rowid, book_id, chapter_id, summary, synthesized_text)
+        VALUES (new.rowid, new.book_id, new.chapter_id, new.summary, new.synthesized_text);
+      END;
+    `
+  },
+  {
+    version: 13,
+    name: "add_chapter_memory_embeddings",
+    sql: `
+      CREATE TABLE chapter_memory_embeddings (
+        book_id TEXT NOT NULL,
+        chapter_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        dimensions INTEGER NOT NULL CHECK (dimensions > 0),
+        vector_blob BLOB NOT NULL,
+        source_hash TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (book_id, chapter_id, model_id),
+        FOREIGN KEY (book_id, chapter_id)
+          REFERENCES chapter_memory(book_id, chapter_id)
+          ON DELETE CASCADE
+      ) STRICT;
+
+      CREATE INDEX chapter_memory_embeddings_book_model_idx
+      ON chapter_memory_embeddings(book_id, model_id);
+    `
   }
 ];
 

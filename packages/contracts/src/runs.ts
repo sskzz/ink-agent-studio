@@ -19,12 +19,23 @@ export const runStatusSchema = z.enum([
   "interrupted" // 被中断，如进程重启（终态）
 ]);
 
-/** 章节类命令的公共输入：默认值保证前端可提交最简指令。 */
+/** 章节正文生成模式：首次生成/继续追加/整章重写。 */
+export const chapterGenerationModeSchema = z.enum(["generate", "continue", "regenerate"]);
+
+/** 章节类命令的公共输入：默认值保证旧客户端仍可提交最简指令。 */
 const chapterCommandInputSchema = z.object({
   instruction: z.string().default(""), // 用户给 Agent 的补充指令，可留空
   selectedContextFileIds: z.array(z.string()).default([]), // 用户点选参考的上下文文件
   sceneType: z.string().default("auto"), // 场景类型，auto 表示由 Agent 自行判断
-  allowDegradedStyle: z.boolean().default(false) // 是否允许在预算不足时降级模仿风格
+  allowDegradedStyle: z.boolean().default(false), // 是否允许在预算不足时降级模仿风格
+  generationMode: chapterGenerationModeSchema.optional()
+}).strict();
+
+/** 已保存章节的状态观察输入；sourceRunId 用于追溯是哪次生成被采纳。 */
+const observeChapterInputSchema = z.object({
+  sourceRunId: z.string().min(1).nullable().default(null),
+  chapterRevision: z.number().int().positive().nullable().default(null),
+  contentHash: z.string().min(1).nullable().default(null)
 }).strict();
 
 /**
@@ -38,6 +49,13 @@ export const runCommandSchema = z.discriminatedUnion("type", [
     bookId: z.string().min(1),
     chapterId: z.string().min(1),
     input: chapterCommandInputSchema
+  }).strict(),
+  z.object({
+    schemaVersion: z.literal("run-command.v1"),
+    type: z.literal("observe_chapter"), // 从已保存正文提取并落盘故事状态增量
+    bookId: z.string().min(1),
+    chapterId: z.string().min(1),
+    input: observeChapterInputSchema
   }).strict(),
   z.object({
     schemaVersion: z.literal("run-command.v1"),
@@ -58,6 +76,14 @@ export const runCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("initialize_book"), // 初始化整本书（建大纲、设定等）
     bookId: z.string().min(1),
     input: z.record(z.unknown())
+  }).strict(),
+  z.object({
+    schemaVersion: z.literal("run-command.v1"),
+    type: z.literal("generate_story_plan_batch"), // 生成一个章纲批次并执行质量闸门
+    bookId: z.string().min(1),
+    input: z.object({
+      batchNo: z.number().int().positive()
+    }).strict()
   }).strict(),
   z.object({
     schemaVersion: z.literal("run-command.v1"),
@@ -125,6 +151,7 @@ export const runAcceptedSchema = z.object({
 }).strict();
 
 export type RunStatus = z.infer<typeof runStatusSchema>;
+export type ChapterGenerationMode = z.infer<typeof chapterGenerationModeSchema>;
 export type RunCommand = z.infer<typeof runCommandSchema>;
 export type LegacyRunCommand = z.infer<typeof legacyRunCommandSchema>;
 export type PersistedRunCommand = z.infer<typeof persistedRunCommandSchema>;

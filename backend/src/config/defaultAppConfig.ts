@@ -63,7 +63,15 @@ export const defaultAppConfig = {
     enabled: true,
     writeApprovalRequired: true,
     promptTokenBudget: 1_200,
-    maxActiveEntries: 50
+    maxActiveEntries: 50,
+    embedding: {
+      enabled: true,
+      provider: "local-bge-small-zh",
+      modelId: "Xenova/bge-small-zh-v1.5",
+      dimensions: 512,
+      autoDownload: false,
+      candidateLimit: 1_000
+    }
   },
   skills: {
     enabled: true,

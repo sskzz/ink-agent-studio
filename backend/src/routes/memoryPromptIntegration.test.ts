@@ -90,7 +90,7 @@ describe("memory prompt integration", () => {
     response = await app.request(`/api/v1/books/${bookId}/chapters`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "第一章", content: "门外传来脚步声。" })
+      body: JSON.stringify({ title: "第一章", outline: "她听见门外脚步，克制反应并推进悬念。", content: "门外传来脚步声。" })
     });
     const chapterId = ((await response.json()) as ApiPayload<{ id: string }>).data.id;
 

@@ -335,6 +335,18 @@ export class RunEventStore {
     return row ? mapArtifactRow(row) : null;
   }
 
+  /** 列出 Run 的阶段产物，供调试、恢复确认和前端结果查看。 */
+  listArtifacts(runId: string): RunArtifactRecord[] {
+    if (!readRunRow(this.runtimeDatabase.database, runId)) {
+      throw notFound("运行记录不存在", { runId });
+    }
+    return this.runtimeDatabase.database.prepare(`
+      SELECT * FROM run_artifacts
+      WHERE run_id = ?
+      ORDER BY created_at ASC, rowid ASC
+    `).all(runId).map(mapArtifactRow);
+  }
+
   /**
    * 保存检查点：追加 checkpoint_saved 事件并写入 run_checkpoints（同一事务）。
    * 入参：stage——阶段名；checkpoint——恢复数据；resumable——是否允许中断后恢复。

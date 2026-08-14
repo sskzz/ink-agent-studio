@@ -295,7 +295,7 @@ describe("model configuration routes", () => {
     expect(payload.data.analysis.schemaVersion).toBe("style-analysis.v3");
     expect(payload.data.analysis.antiAiRules).toHaveLength(4);
     expect(payload.data.parameters.tone).toBe("冷静克制");
-    expect(payload.data.featureProfile.schemaVersion).toBe("style-features.v1");
+    expect(payload.data.featureProfile.schemaVersion).toBe("style-features.v2");
     expect(payload.data.featureProfile.metrics).toHaveProperty("averageSentenceLength");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

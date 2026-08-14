@@ -3,9 +3,10 @@
  * 负责全局场景命名、侧边栏折叠状态以及各页面共用的壳层样式，
  * 编辑器页隐藏侧边栏与氛围背景以让出最大写作空间。
  */
-import { CheckCircle2, HardDrive, PanelLeftClose, PanelLeftOpen, SquarePen } from "lucide-react";
+import { CheckCircle2, HardDrive, Moon, PanelLeftClose, PanelLeftOpen, SquarePen, Sun } from "lucide-react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { navigationItems, shellCopy } from "@/config/navigation";
+import { useThemeStore } from "@/shared/stores/themeStore";
 import { useWorkspaceStore } from "@/shared/stores/workspaceStore";
 import "./AppShell.css";
 
@@ -25,6 +26,7 @@ function getSceneName(pathname: string) {
  */
 export function AppShell() {
   const { sidebarCollapsed, toggleSidebar } = useWorkspaceStore();
+  const { theme, toggleTheme } = useThemeStore();
   const location = useLocation();
   const isEditorRoute = location.pathname === "/editor";
   const isAntiAiRoute = location.pathname === "/anti-ai";
@@ -116,6 +118,17 @@ export function AppShell() {
               <h2>{currentPage.label}</h2>
             </div>
             <div className="topbar-actions" aria-label="工作台状态">
+              <button
+                aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}
+                className="theme-toggle"
+                type="button"
+                onClick={toggleTheme}
+                title={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}
+              >
+                <span className="theme-toggle-icon">
+                  {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+                </span>
+              </button>
               <span className="status-pill">{shellCopy.statusPills[0]}</span>
               <span className="command-pill">{shellCopy.statusPills[1]}</span>
             </div>

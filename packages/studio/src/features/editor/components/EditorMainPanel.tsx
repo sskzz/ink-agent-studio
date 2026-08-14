@@ -10,9 +10,11 @@
 import { CircleDotDashed, Plus } from "lucide-react";
 import { MarkdownRenderer } from "@/shared/components/ui/MarkdownRenderer";
 import type {
+  ChapterGenerationMode,
+} from "@ink-agent/contracts";
+import type {
   ChapterContinueResult,
-  ChapterDetail,
-  ChapterUpdateInput
+  ChapterDetail
 } from "@/features/chapter/api/chapterApi";
 import { ChapterEditorPanel } from "@/features/chapter/components/ChapterEditorPanel";
 import type { EditorNavItem } from "../types";
@@ -34,8 +36,8 @@ interface EditorMainPanelProps {
   streamedDraft?: string;
   /** 生成中断/失败：显示"断点续写"按钮。 */
   runInterrupted?: boolean;
-  onSaveChapter?: (patch: ChapterUpdateInput) => void;
-  onContinueChapter?: (instruction: string) => void;
+  onAcceptChapter?: (runId: string) => void;
+  onContinueChapter?: (mode: ChapterGenerationMode, instruction: string) => void;
   onResumeChapter?: () => void;
   onDeleteChapter?: () => void;
   onDismissContinueResult?: () => void;
@@ -54,7 +56,7 @@ export function EditorMainPanel({
   chapterError,
   streamedDraft,
   runInterrupted,
-  onSaveChapter,
+  onAcceptChapter,
   onContinueChapter,
   onResumeChapter,
   onDeleteChapter,
@@ -81,8 +83,8 @@ export function EditorMainPanel({
             isLatestChapter={Boolean(isLatestChapter)}
             continueResult={continueResult ?? null}
             error={chapterError ?? null}
-            onSave={(patch) => onSaveChapter?.(patch)}
-            onContinue={(instruction) => onContinueChapter?.(instruction)}
+            onAccept={(runId) => onAcceptChapter?.(runId)}
+            onContinue={(mode, instruction) => onContinueChapter?.(mode, instruction)}
             onResume={() => onResumeChapter?.()}
             onDelete={() => onDeleteChapter?.()}
             onDismissResult={() => onDismissContinueResult?.()}

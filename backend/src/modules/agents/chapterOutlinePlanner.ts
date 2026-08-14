@@ -7,9 +7,10 @@
  *      - scenes：分场景的正文布局（每场景的目标、事件、推进），供正文生成严格遵循；
  *      - progression：本章剧情推进（从哪到哪）；
  *      - foreshadowing：本章伏笔动作（植入 plant / 推进 advance / 回收 payoff，尽量引用伏笔池 id）。
- * 降级策略：模型调用失败或校验不通过时返回 null，正文回退到静态细纲 + 本章意图，照常生成。
+ * 强制策略：无可用模型、调用失败或两次 JSON 校验均不通过时抛错，正文生成不得继续。
  */
 import { z } from "zod";
+import { badRequest } from "../../utils/errors.js";
 import { generateModelText } from "../ai/modelGateway.js";
 import { getModelConfig, getModelRoutes } from "../models/modelConfigRepository.js";
 import type { RuntimeState } from "../../schemas/runtimeStateSchemas.js";
@@ -103,6 +104,7 @@ function listAdvanceableForeshadowing(runtimeState: RuntimeState | null) {
  * @param instruction 用户续写指令（可为空）
  * @param currentFocus current_focus.md 内容（可为空）
  * @param runtimeState 权威状态（提供伏笔池与下一阶段目标）
+ * @throws 无可用模型或最终输出不符合 chapter-outline.v1 时终止正文生成
  */
 export async function planChapterOutline(
   workspacePaths: WorkspacePaths,
@@ -114,12 +116,12 @@ export async function planChapterOutline(
     runtimeState: RuntimeState | null;
     bookMetadata?: BookGenerationMetadata;
   }
-): Promise<ChapterOutline | null> {
+): Promise<ChapterOutline> {
   const routes = await getModelRoutes(workspacePaths);
   const planningModelId = routes.planningModelId ?? routes.writingModelId;
-  if (!planningModelId) return null;
+  if (!planningModelId) throw badRequest("尚未配置可用的规划或写作模型，无法生成章节细纲");
   const model = await getModelConfig(workspacePaths, planningModelId);
-  if (!model.enabled) return null;
+  if (!model.enabled) throw badRequest("章节细纲规划模型已停用，无法继续生成正文");
 
   const pendingForeshadowing = listAdvanceableForeshadowing(options.runtimeState);
   const nextGoals = (options.runtimeState?.state.nextGoals ?? []).join("\n") || "（无）";
@@ -148,31 +150,54 @@ export async function planChapterOutline(
     "只输出 JSON。"
   ].filter(Boolean).join("\n\n");
 
+  const first = await generateModelText(workspacePaths, model, {
+    systemPrompt,
+    userPrompt,
+    temperature: 0.4,
+    maxTokens: 2_200,
+    responseFormat: "json_object",
+    timeoutMs: 60_000
+  });
+  const parsedFirst = parseChapterOutline(first.text);
+  if (parsedFirst.success) return parsedFirst.data;
+
+  const repaired = await generateModelText(workspacePaths, model, {
+    systemPrompt: [
+      "你是 JSON 修复器。把输入修复为严格符合 chapter-outline.v1 的 JSON 对象。",
+      "不得补写章节正文，不得输出解释、Markdown 或 JSON 之外的内容。"
+    ].join("\n"),
+    userPrompt: `【校验错误】\n${parsedFirst.error}\n\n【待修复输出】\n${first.text.slice(0, 12_000)}`,
+    temperature: 0,
+    maxTokens: 2_200,
+    responseFormat: "json_object",
+    timeoutMs: 60_000
+  });
+  const parsedRepair = parseChapterOutline(repaired.text);
+  if (parsedRepair.success) return parsedRepair.data;
+  throw badRequest(`章节细纲生成失败，修复后仍未通过校验：${parsedRepair.error}`);
+}
+
+function parseChapterOutline(text: string): { success: true; data: ChapterOutline } | { success: false; error: string } {
   try {
-    const result = await generateModelText(workspacePaths, model, {
-      systemPrompt,
-      userPrompt,
-      temperature: 0.4,
-      maxTokens: 2_200,
-      responseFormat: "json_object",
-      timeoutMs: 60_000
-    });
-    const start = result.text.indexOf("{");
-    const end = result.text.lastIndexOf("}");
-    if (start < 0 || end < start) return null;
-    const parsed = chapterOutlineSchema.parse(JSON.parse(result.text.slice(start, end + 1)));
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start < 0 || end < start) return { success: false, error: "响应中没有 JSON 对象" };
+    const parsed = chapterOutlineSchema.parse(JSON.parse(text.slice(start, end + 1)));
     return {
-      summary: parsed.summary,
-      scenes: parsed.scenes,
-      progression: parsed.progression,
-      foreshadowing: parsed.foreshadowing.map((item) => ({
-        item: item.item ?? null,
-        action: item.action,
-        note: item.note
-      }))
+      success: true,
+      data: {
+        summary: parsed.summary,
+        scenes: parsed.scenes,
+        progression: parsed.progression,
+        foreshadowing: parsed.foreshadowing.map((item) => ({
+          item: item.item ?? null,
+          action: item.action,
+          note: item.note
+        }))
+      }
     };
-  } catch {
-    return null;
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 

@@ -12,10 +12,13 @@ import { LoaderCircle, RotateCcw, Send, TriangleAlert, Trash2 } from "lucide-rea
 import { useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/shared/components/ui/ConfirmDialog";
 import type {
+  ChapterGenerationMode,
+} from "@ink-agent/contracts";
+import type {
   ChapterContinueResult,
-  ChapterDetail,
-  ChapterUpdateInput
+  ChapterDetail
 } from "@/features/chapter/api/chapterApi";
+import { decideKnowledgeAuditIssue } from "@/features/chapter/api/chapterApi";
 
 /** 章节状态中文标签，用于只读展示区的状态徽章。 */
 const chapterStatusLabels: Record<ChapterDetail["status"], string> = {
@@ -49,10 +52,10 @@ interface ChapterEditorPanelProps {
   continueResult: ChapterContinueResult | null;
   /** 面板内联错误信息（生成/保存/删除失败时展示）。 */
   error: string | null;
-  /** 保存回调：采纳草稿时提交新的正文内容（只读面板唯一写入路径）。 */
-  onSave: (patch: ChapterUpdateInput) => void;
-  /** 续写回调：提交写作指令（可空；重新生成走固定指令 + 重写建议）。 */
-  onContinue: (instruction: string) => void;
+  /** 采纳生成 Run，由后端按写入策略保存正文并启动故事线观察。 */
+  onAccept: (runId: string) => void;
+  /** 生成回调：显式提交首次生成、续写或整章重写模式。 */
+  onContinue: (mode: ChapterGenerationMode, instruction: string) => void;
   /** 断点续写回调：恢复中断的生成 Run。 */
   onResume: () => void;
   /** 删除章节回调（父级执行删除与列表刷新）。 */
@@ -73,7 +76,7 @@ export function ChapterEditorPanel({
   isLatestChapter,
   continueResult,
   error,
-  onSave,
+  onAccept,
   onContinue,
   onResume,
   onDelete,
@@ -83,6 +86,14 @@ export function ChapterEditorPanel({
   // 重写建议：完全重写时手动输入，告知 AI 哪里不合适（随指令一并提交）
   const [rewriteSuggestion, setRewriteSuggestion] = useState("");
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [auditDecisionPending, setAuditDecisionPending] = useState<string | null>(null);
+  const [auditDecisions, setAuditDecisions] = useState<Record<string, "confirmed" | "exempted">>({});
+  const [auditDecisionEditor, setAuditDecisionEditor] = useState<{
+    fingerprint: string;
+    decision: "confirmed" | "exempted";
+    reason: string;
+  } | null>(null);
+  const [auditDecisionError, setAuditDecisionError] = useState<string | null>(null);
   // 实时输出流：始终滚动到最新内容
   const streamRef = useRef<HTMLPreElement | null>(null);
   useEffect(() => {
@@ -95,6 +106,12 @@ export function ChapterEditorPanel({
     setInstruction("");
     setRewriteSuggestion("");
   }, [chapter?.id]);
+
+  useEffect(() => {
+    setAuditDecisions({});
+    setAuditDecisionEditor(null);
+    setAuditDecisionError(null);
+  }, [chapter?.id, continueResult?.runId]);
 
   if (loading && !chapter) {
     return (
@@ -118,6 +135,41 @@ export function ChapterEditorPanel({
   // "已生成完整内容"判定：正文非空且不是新建时的默认占位文本（"待继续写作"）；
   // 只有生成过完整内容的章节才显示"重新生成整章"按钮
   const hasGeneratedContent = chapter.content.trim().length > 0 && !chapter.content.includes("待继续写作");
+  const finalKnowledgeAudit = continueResult?.knowledgeAudit?.final;
+  const semanticAudit = continueResult?.knowledgeAudit?.semantic;
+  const effectiveSemanticIssues = semanticAudit?.issues.map((issue) => {
+    const decision = auditDecisions[issue.fingerprint] ?? issue.decision;
+    return { ...issue, decision, effectiveSeverity: decision === "exempted" ? "warning" as const : issue.severity };
+  }) ?? [];
+  const knowledgeAuditPassed = finalKnowledgeAudit?.passed === true
+    && effectiveSemanticIssues.every((issue) => issue.effectiveSeverity !== "blocking");
+
+  function openDecisionEditor(issue: (typeof effectiveSemanticIssues)[number], decision: "confirmed" | "exempted") {
+    setAuditDecisionError(null);
+    setAuditDecisionEditor({
+      fingerprint: issue.fingerprint,
+      decision,
+      reason: decision === "exempted" ? "作者确认该处为有意安排，不构成知识冲突" : "作者确认该疑点成立"
+    });
+  }
+
+  async function decideIssue(issue: (typeof effectiveSemanticIssues)[number]) {
+    if (!chapter || auditDecisionEditor?.fingerprint !== issue.fingerprint) return;
+    const reason = auditDecisionEditor.reason.trim();
+    if (!reason) return;
+    const decision = auditDecisionEditor.decision;
+    setAuditDecisionPending(issue.fingerprint);
+    setAuditDecisionError(null);
+    try {
+      await decideKnowledgeAuditIssue(chapter.bookId, issue, decision, reason);
+      setAuditDecisions((current) => ({ ...current, [issue.fingerprint]: decision }));
+      setAuditDecisionEditor(null);
+    } catch (decisionError) {
+      setAuditDecisionError(decisionError instanceof Error ? decisionError.message : String(decisionError));
+    } finally {
+      setAuditDecisionPending(null);
+    }
+  }
 
   return (
     <div className="chapter-editor">
@@ -201,16 +253,16 @@ export function ChapterEditorPanel({
             type="button"
             data-loading={generating ? "true" : undefined}
             disabled={generating || saving || deleting}
-            onClick={() => onContinue(instruction)}
+            onClick={() => onContinue(hasGeneratedContent ? "continue" : "generate", instruction)}
           >
-            {generating ? "正在生成..." : "生成续写草稿"}
+            {generating ? "正在生成..." : hasGeneratedContent ? "生成续写草稿" : "生成章节初稿"}
           </button>
           {hasGeneratedContent && isLatestChapter ? (
             <button
               className="ghost-button"
               type="button"
               disabled={generating || saving || deleting}
-              onClick={() => onContinue(
+              onClick={() => onContinue("regenerate",
                 rewriteSuggestion.trim()
                   ? `${REGENERATE_INSTRUCTION}\n重写建议：${rewriteSuggestion.trim()}`
                   : REGENERATE_INSTRUCTION
@@ -269,29 +321,69 @@ export function ChapterEditorPanel({
               ))}
             </ul>
           ) : null}
+          <div className="chapter-knowledge-audit" data-passed={knowledgeAuditPassed ? "true" : "false"}>
+            <div>
+              <strong>{knowledgeAuditPassed ? "知识一致性审核通过" : "知识一致性审核阻断"}</strong>
+              {continueResult.knowledgeAudit?.revisionCount ? <span>已定向修订 {continueResult.knowledgeAudit.revisionCount} 次</span> : null}
+            </div>
+            {!finalKnowledgeAudit ? <p>该生成结果缺少知识审核报告，请重新生成后再采纳。</p> : null}
+            {finalKnowledgeAudit?.blockingIssues.length ? (
+              <ul>
+                {finalKnowledgeAudit.blockingIssues.map((issue, index) => (
+                  <li key={`${issue.code}-${issue.sourceId}-${index}`}>
+                    {issue.message}{issue.evidence ? <small>证据：{issue.evidence}</small> : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {finalKnowledgeAudit?.warnings.length ? (
+              <ul className="chapter-knowledge-warnings">
+                {finalKnowledgeAudit.warnings.map((warning, index) => <li key={`${warning.code}-${index}`}>{warning.message}</li>)}
+              </ul>
+            ) : null}
+            {semanticAudit?.triggered ? (
+              <div className="chapter-semantic-knowledge-audit">
+                <strong>语义疑点审核</strong>
+                {semanticAudit.degradedReason ? <p>{semanticAudit.degradedReason}</p> : null}
+                {effectiveSemanticIssues.map((issue) => (
+                  <article key={issue.fingerprint} data-severity={issue.effectiveSeverity}>
+                    <div><b>{issue.code}</b><span>{Math.round(issue.confidence * 100)}% 置信度</span></div>
+                    <p>{issue.reason}</p>
+                    {issue.evidence ? <small>证据：{issue.evidence}</small> : null}
+                    <div className="knowledge-audit-decision-actions">
+                      <button className="ghost-button" type="button" disabled={auditDecisionPending === issue.fingerprint} onClick={() => openDecisionEditor(issue, "confirmed")}>确认冲突</button>
+                      <button className="ghost-button" type="button" disabled={auditDecisionPending === issue.fingerprint} onClick={() => openDecisionEditor(issue, "exempted")}>人工豁免</button>
+                      {issue.decision ? <BadgeDecision decision={issue.decision} /> : null}
+                    </div>
+                    {auditDecisionEditor?.fingerprint === issue.fingerprint ? (
+                      <div className="knowledge-audit-decision-editor">
+                        <label>
+                          <span>{auditDecisionEditor.decision === "exempted" ? "豁免原因" : "确认原因"}</span>
+                          <textarea autoFocus maxLength={500} value={auditDecisionEditor.reason} onChange={(event) => setAuditDecisionEditor({ ...auditDecisionEditor, reason: event.target.value })} />
+                        </label>
+                        {auditDecisionError ? <p className="knowledge-inline-error">{auditDecisionError}</p> : null}
+                        <div>
+                          <button className="ghost-button" type="button" disabled={auditDecisionPending === issue.fingerprint} onClick={() => setAuditDecisionEditor(null)}>取消</button>
+                          <button className="primary-button" type="button" disabled={auditDecisionPending === issue.fingerprint || !auditDecisionEditor.reason.trim()} onClick={() => void decideIssue(issue)}>{auditDecisionPending === issue.fingerprint ? "提交中…" : "提交裁决"}</button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            ) : null}
+          </div>
           <div className="chapter-continue-draft">
             <pre>{continueResult.draft}</pre>
           </div>
           <div className="chapter-continue-actions">
-            {/* 只读面板的唯一写入路径：采纳 = 用草稿覆盖正文并保存到后端；
-                章节尚未自定义标题（默认"新章节"）时顺带采纳 AI 生成的标题 */}
             <button
               className="primary-button"
               type="button"
               data-loading={saving ? "true" : undefined}
-              disabled={saving || generating || deleting}
-              onClick={() => onSave({
-                content: continueResult.draft,
-                status: "drafting",
-                // 生成完成后后端通常已经回填细纲；这里再带上同一份有效细纲，
-                // 即使回填发生在旧数据或瞬时写入失败，也不会在采纳正文时丢失。
-                outline: !chapter.outline.trim() && continueResult.chapterOutline?.trim()
-                  ? continueResult.chapterOutline
-                  : undefined,
-                title: continueResult.chapterTitle && (chapter.title === "新章节" || !chapter.title.trim())
-                  ? continueResult.chapterTitle
-                  : undefined
-              })}
+              disabled={saving || generating || deleting || !knowledgeAuditPassed}
+              title={knowledgeAuditPassed ? "采纳并保存" : "知识一致性审核未通过，不能采纳"}
+              onClick={() => onAccept(continueResult.runId)}
             >
               {saving ? "保存中..." : "采纳并保存"}
             </button>
@@ -303,4 +395,8 @@ export function ChapterEditorPanel({
       ) : null}
     </div>
   );
+}
+
+function BadgeDecision({ decision }: { decision: "confirmed" | "exempted" }) {
+  return <span className={`knowledge-audit-decision ${decision}`}>{decision === "exempted" ? "已豁免" : "已确认"}</span>;
 }

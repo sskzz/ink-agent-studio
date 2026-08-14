@@ -76,6 +76,15 @@ function initializationCommand(bookId = "book-1"): Extract<RunCommand, { type: "
   };
 }
 
+function storyPlanBatchCommand(batchNo: number, bookId = "book-scale"): Extract<RunCommand, { type: "generate_story_plan_batch" }> {
+  return {
+    schemaVersion: "run-command.v1",
+    type: "generate_story_plan_batch",
+    bookId,
+    input: { batchNo }
+  };
+}
+
 describe("RunCoordinator", () => {
   it("enforces global and per-book concurrency", async () => {
     let globalActive = 0;
@@ -112,6 +121,35 @@ describe("RunCoordinator", () => {
       "completed",
       "completed"
     ]);
+  });
+
+  it("serializes all 50 story-plan batches for the same 1000-chapter book", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const executionOrder: number[] = [];
+    const handler: RunCommandHandler = async ({ command }) => {
+      if (command.type !== "generate_story_plan_batch") throw new Error("unexpected command");
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      executionOrder.push(command.input.batchNo);
+      await new Promise<void>((resolve) => setTimeout(resolve, 2));
+      active -= 1;
+      return { batchNo: command.input.batchNo };
+    };
+    const { coordinator, eventStore } = await createCoordinator(
+      async () => ({ unused: true }),
+      { globalConcurrency: 4, perBookMutationConcurrency: 1 },
+      { generate_story_plan_batch: handler }
+    );
+
+    const runs = await Promise.all(Array.from({ length: 50 }, (_, index) =>
+      coordinator.enqueueSystem(storyPlanBatchCommand(index + 1))
+    ));
+    await coordinator.waitForIdle();
+
+    expect(maxActive).toBe(1);
+    expect(executionOrder).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+    expect(runs.every((run) => eventStore.getRun(run.id).status === "completed")).toBe(true);
   });
 
   it("aborts an active run and records cancellation", async () => {

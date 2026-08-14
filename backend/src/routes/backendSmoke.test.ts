@@ -82,6 +82,7 @@ describe("backend routes smoke", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         title: "Test Chapter",
+        outline: "主角沿既有线索继续推进，并在段末形成新的悬念。",
         content: "# Test Chapter\n\nFirst paragraph."
       })
     });

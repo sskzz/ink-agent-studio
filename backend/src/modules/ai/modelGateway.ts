@@ -26,6 +26,7 @@ import type {
   ModelProviderAdapter
 } from "./types.js";
 import { modelTestResult } from "./types.js";
+import { checkContextWindow } from "../prompts/contextWindowGuard.js";
 
 /** 已注册的模型服务商 adapter，通过 provider 名称索引。 */
 const adapters = new Map<string, ModelProviderAdapter>([
@@ -111,7 +112,8 @@ export async function generateModelTextWithFallback(
   options: ModelGatewayOptions = {}
 ): Promise<ModelGenerateTextResult> {
   const activeContext = getActiveModelExecutionContext();
-  const policy = activeContext?.modelPolicy ?? (await new ConfigRepository(paths).readOrCreate()).models;
+  const appConfig = await new ConfigRepository(paths).readOrCreate();
+  const policy = activeContext?.modelPolicy ?? appConfig.models;
   const retry = options.retry ?? policy.retry;
   assertRetryPolicy(retry);
   const purpose = options.purpose ?? normalizePurpose(primaryModel.purpose);
@@ -186,6 +188,16 @@ export async function generateModelTextWithFallback(
     const adapter = adapters.get(model.provider);
     // 跳过停用模型与未实现文本生成的 adapter
     if (!model.enabled || !adapter?.generateText) continue;
+    const contextCheck = checkContextWindow(model, input, appConfig.context);
+    if (!contextCheck.ok) {
+      lastError = new ModelGatewayError({
+        kind: "invalid_request",
+        retryable: false,
+        message: `${model.name || model.apiModel}：${contextCheck.message}`
+      });
+      continue;
+    }
+    const modelInput = { ...input, maxTokens: contextCheck.budget.providerMaxTokens };
 
     for (let modelAttempt = 1; modelAttempt <= retry.maxAttemptsPerModel; modelAttempt += 1) {
       if (totalAttempts >= retry.maxTotalAttempts) break;
@@ -208,7 +220,7 @@ export async function generateModelTextWithFallback(
           ? options.apiKeyOverride
           : await getModelSecret(paths, model.id);
         const result = await adapter.generateText(model, apiKey, {
-          ...input,
+          ...modelInput,
           timeoutMs,
           signal,
           onDelta: queueModelDelta

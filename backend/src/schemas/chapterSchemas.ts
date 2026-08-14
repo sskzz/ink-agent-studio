@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { chapterGenerationModeSchema } from "@ink-agent/contracts";
 import { sceneTypeSchema } from "./styleVersionSchemas.js";
 
 /**
@@ -7,7 +8,23 @@ import { sceneTypeSchema } from "./styleVersionSchemas.js";
  */
 
 /** 章节记录结构，与 books/{bookId}/chapters/index.json 中的条目对应。 */
-export const chapterRecordSchema = z.object({
+export const chapterStateSyncStatusSchema = z.enum(["pending", "processing", "synced", "failed", "stale"]);
+
+export const chapterRecordSchema = z.preprocess((value) => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  const updatedAt = typeof record.updatedAt === "string" ? record.updatedAt : new Date(0).toISOString();
+  return {
+    ...record,
+    revision: typeof record.revision === "number" ? record.revision : 1,
+    contentHash: typeof record.contentHash === "string" ? record.contentHash : null,
+    stateSyncStatus: typeof record.stateSyncStatus === "string" ? record.stateSyncStatus : "synced",
+    stateSyncRevision: typeof record.stateSyncRevision === "number" ? record.stateSyncRevision : (typeof record.revision === "number" ? record.revision : 1),
+    stateSyncError: typeof record.stateSyncError === "string" ? record.stateSyncError : null,
+    stateSyncedAt: typeof record.stateSyncedAt === "string" ? record.stateSyncedAt : null,
+    updatedAt
+  };
+}, z.object({
   id: z.string(),
   bookId: z.string(),
   volumeNo: z.number().int().positive(),
@@ -18,9 +35,16 @@ export const chapterRecordSchema = z.object({
   status: z.enum(["planned", "drafting", "reviewed", "published"]),
   outline: z.string(),
   summary: z.string(),
+  revision: z.number().int().positive(),
+  /** 旧索引没有正文哈希，首次读取正文后由服务层回填。 */
+  contentHash: z.string().min(1).nullable(),
+  stateSyncStatus: chapterStateSyncStatusSchema,
+  stateSyncRevision: z.number().int().nonnegative(),
+  stateSyncError: z.string().nullable(),
+  stateSyncedAt: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string()
-});
+}));
 
 /** 章节列表索引结构。 */
 export const chaptersIndexSchema = z.array(chapterRecordSchema);
@@ -48,5 +72,11 @@ export const chapterAiTaskInputSchema = z.object({
   instruction: z.string().optional().default(""),
   selectedContextFileIds: z.array(z.string()).optional().default([]),
   sceneType: z.union([sceneTypeSchema, z.literal("auto")]).optional().default("auto"),
-  allowDegradedStyle: z.boolean().optional().default(false)
+  allowDegradedStyle: z.boolean().optional().default(false),
+  generationMode: chapterGenerationModeSchema.optional().default("continue")
+});
+
+/** 采纳一次已完成的章节生成 Run。正文与细纲均从 Run 输出读取，前端不能自行拼接。 */
+export const chapterAcceptGenerationInputSchema = z.object({
+  runId: z.string().min(1)
 });

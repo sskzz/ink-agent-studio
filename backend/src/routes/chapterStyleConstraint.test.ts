@@ -77,7 +77,7 @@ describe("chapter writing style constraints", () => {
     response = await app.request(`/api/v1/books/${bookId}/chapters`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "第一章", content: "# 第一章\n\n门外传来脚步声。" })
+      body: JSON.stringify({ title: "第一章", outline: "她听见脚步靠近，按住门把并等待转折。", content: "# 第一章\n\n门外传来脚步声。" })
     });
     const chapterId = ((await response.json()) as ApiPayload<{ id: string }>).data.id;
 
@@ -129,8 +129,8 @@ describe("chapter writing style constraints", () => {
       body: JSON.stringify({ allowDegradedStyle: true })
     });
     expect(response.status).toBe(200);
-    // 模型调用 = 章节意图规划 + 细纲规划 + 正文生成 + continue 语义审稿 + review 审稿 + polish 修订及复检 = 7 次
-    expect(prompts).toHaveLength(7);
+    // 已有细纲时无需再次规划：章节意图 + 正文生成 + continue 语义审稿 + review 审稿 + polish 修订及复检 = 6 次
+    expect(prompts).toHaveLength(6);
     // 风格约束进入正文生成/审稿/修订 prompt（意图规划 prompt 不含风格约束，不参与该断言）
     expect(prompts.filter((prompt) => prompt.includes("第三人称贴身视角")).length).toBeGreaterThan(0);
     expect(prompts.some((prompt) => prompt.includes("【技能：章节续写】"))).toBe(true);
@@ -205,7 +205,7 @@ describe("chapter writing style constraints", () => {
     response = await app.request(`/api/v1/books/${bookId}/chapters`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "第一章", content: "开场。" })
+      body: JSON.stringify({ title: "第一章", outline: "门外异响逼近，人物以短促动作应对。", content: "开场。" })
     });
     const chapterId = ((await response.json()) as ApiPayload<{ id: string }>).data.id;
 

@@ -121,6 +121,12 @@ export interface ChapterRecord {
   status: "planned" | "drafting" | "reviewed" | "published";
   outline: string;
   summary: string;
+  revision: number;
+  contentHash: string | null;
+  stateSyncStatus: "pending" | "processing" | "synced" | "failed" | "stale";
+  stateSyncRevision: number;
+  stateSyncError: string | null;
+  stateSyncedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -129,6 +135,21 @@ export interface ChapterRecord {
 export interface ModelThinkingConfig {
   enabled: boolean;
   effort: "low" | "high" | "max" | null;
+}
+
+export interface ModelCapabilities {
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  reasoningReserveTokens?: number;
+  supportsThinking?: boolean;
+  supportsJsonSchema?: boolean;
+  supportsStreaming?: boolean;
+  pricing?: {
+    currency: string;
+    promptMicrosPerMillionTokens: number;
+    completionMicrosPerMillionTokens: number;
+  };
+  [key: string]: unknown;
 }
 
 /** 模型配置记录，保存在 config/model-configs.json；apiKey 不落盘在此。 */
@@ -141,7 +162,7 @@ export interface ModelConfigRecord {
   purpose: ModelPurpose;
   enabled: boolean;
   isDefault: boolean;
-  capabilities: Record<string, unknown>;
+  capabilities: ModelCapabilities;
   thinking: ModelThinkingConfig | null;
   note: string;
   createdAt: string;

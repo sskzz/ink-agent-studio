@@ -6,7 +6,10 @@ export type DegradationCode =
   | "SEMANTIC_REVIEW_UNAVAILABLE"
   | "LOCAL_REVIEW_UNAVAILABLE"
   | "REVISION_FAILED"
-  | "CHAPTER_OUTLINE_UNAVAILABLE";
+  | "KNOWLEDGE_REVISION_FAILED"
+  | "KNOWLEDGE_AUDIT_BLOCKED"
+  | "KNOWLEDGE_SEMANTIC_AUDIT_DEGRADED"
+  | "KNOWLEDGE_SEMANTIC_AUDIT_BLOCKED";
 
 /** 单条降级说明：原因码 + 面向用户的中文描述 + 是否可恢复（软降级）。 */
 export interface DegradationReason {

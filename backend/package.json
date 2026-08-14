@@ -19,8 +19,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@ink-agent/contracts": "workspace:*",
     "@hono/node-server": "^1.14.4",
+    "@huggingface/transformers": "^3.8.1",
+    "@ink-agent/contracts": "workspace:*",
     "dotenv": "^16.6.1",
     "hono": "^4.8.4",
     "zod": "^3.25.76"

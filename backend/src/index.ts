@@ -32,6 +32,7 @@ async function bootstrap() {
     const legacyImport = await services.legacyRunImporter.import();
     await services.patchService.recoverIncompleteApplications();
     const runRecovery = await services.runCoordinator.recoverAndResumeRequiredWorkflows();
+    const chapterObservationRecovery = await services.runCoordinator.recoverChapterStateObservations(services.paths);
     const app = createApp(services);
     const server = serve(
       {
@@ -53,10 +54,16 @@ async function bootstrap() {
           console.log(`恢复检查：${runRecovery.interrupted} 个未完成 Run 已标记为 interrupted`);
         }
         if (runRecovery.resumedRunIds.length > 0) {
-          console.log(`自动恢复：${runRecovery.resumedRunIds.length} 个作品初始化 Run 已重新入队`);
+          console.log(`自动恢复：${runRecovery.resumedRunIds.length} 个必要工作流 Run 已重新入队`);
         }
         if (runRecovery.failures.length > 0) {
           console.error("自动恢复失败：", runRecovery.failures);
+        }
+        if (chapterObservationRecovery.resumedRunIds.length > 0) {
+          console.log(`自动恢复：${chapterObservationRecovery.resumedRunIds.length} 个章节状态观察 Run 已重新入队`);
+        }
+        if (chapterObservationRecovery.failures.length > 0) {
+          console.error("章节状态观察恢复失败：", chapterObservationRecovery.failures);
         }
       }
     );

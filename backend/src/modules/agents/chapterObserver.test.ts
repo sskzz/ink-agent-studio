@@ -93,4 +93,17 @@ describe("validateStateDeltaAgainstCurrent", () => {
 
     expect(issues.some((issue) => issue.includes("章节号不能回退"))).toBe(true);
   });
+
+  it("拒绝模型填写非当前章节号", () => {
+    const delta: StateDelta = {
+      schemaVersion: "book-state-delta.v1",
+      foreshadowing: [
+        { id: "hook-a", content: "伏笔 A", relatedEntityIds: [], placement: "第一卷", resolution: "终卷", status: "planted", lastAdvancedChapter: 3 }
+      ]
+    };
+
+    const issues = validateStateDeltaAgainstCurrent(delta, createRuntimeStateFixture(), 2);
+
+    expect(issues.some((issue) => issue.includes("必须为当前章节 2"))).toBe(true);
+  });
 });

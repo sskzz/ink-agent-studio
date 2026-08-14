@@ -9,22 +9,21 @@ import { ArrowLeft, BookOpenText, CircleDotDashed, Eye, FileText, Flag, FolderOp
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
+  acceptChapterGeneration,
   createContinueRun,
   createChapter,
   deleteChapter,
   getChapter,
   listChapters,
-  resolveContinueResult,
-  updateChapter
+  resolveContinueResult
 } from "@/features/chapter/api/chapterApi";
 import type {
   ChapterContinueResult,
   ChapterDetail,
-  ChapterSummary,
-  ChapterUpdateInput
+  ChapterSummary
 } from "@/features/chapter/api/chapterApi";
 import { getRun, resumeRun, subscribeRunEvents } from "@/features/runs/api/runsApi";
-import type { RunEvent } from "@ink-agent/contracts";
+import type { ChapterGenerationMode, RunEvent } from "@ink-agent/contracts";
 import { getWorkspaceBookDetail } from "@/shared/api/workspaceApi";
 import type { WorkspaceBookDetail } from "@/shared/api/workspaceApi";
 import { AssistantChat } from "@/features/editor/components/AssistantPanels";
@@ -424,6 +423,9 @@ export function EditorPage() {
   // 最近一次续写指令与重试计数：模型服务临时故障（账号池/限流）时自动重试一次
   const [lastContinueInstruction, setLastContinueInstruction] = useState("");
   const [continueRetries, setContinueRetries] = useState(0);
+  const [lastGenerationMode, setLastGenerationMode] = useState<ChapterGenerationMode>("continue");
+  const [observationRunId, setObservationRunId] = useState<string | null>(null);
+  const [storylineRevision, setStorylineRevision] = useState(0);
   const scrollbarTimerRef = useRef<number | null>(null);
   // SSE 回调不会因章节切换重建，使用 ref 判断结果是否仍属于当前章节。
   const activeChapterIdRef = useRef<string | null>(null);
@@ -589,25 +591,24 @@ export function EditorPage() {
     };
   }, [activeItemId, bookDetail?.id]);
 
-  /** 保存章节：提交编辑草稿并刷新章节列表与作品进度。 */
-  async function saveActiveChapter(patch: ChapterUpdateInput) {
+  /** 采纳生成结果：由后端按生成模式追加或替换正文，并返回可追踪的故事线观察 Run。 */
+  async function acceptActiveGeneration(runId: string) {
     if (!bookDetail || !activeChapter) return;
     setChapterSaving(true);
     setChapterError(null);
     setChapterMessage("");
     try {
-      const updated = await updateChapter(bookDetail.id, activeChapter.id, patch);
-      setActiveChapter(updated);
+      const accepted = await acceptChapterGeneration(bookDetail.id, activeChapter.id, runId);
+      setActiveChapter(accepted.chapter);
       setChapters(await listChapters(bookDetail.id));
-      // 采纳保存成功：清空结果面板与生成状态，界面回到章节展示（正文已更新）
       setContinueResult(null);
       setContinueRun(null);
-      setChapterMessage("章节已保存。");
-      // 刷新作品详情以同步顶部栏的字数 / 章节进度
+      setObservationRunId(accepted.observation.runId);
+      setChapterMessage("正文已保存，正在更新故事线...");
       const refreshed = await getWorkspaceBookDetail(bookDetail.id);
       setBookDetail(refreshed);
     } catch (error) {
-      setChapterError(`保存失败：${toMessage(error)}`);
+      setChapterError(`采纳失败：${toMessage(error)}`);
     } finally {
       setChapterSaving(false);
     }
@@ -634,16 +635,17 @@ export function EditorPage() {
    * model_delta 累积为实时正文流；中断/失败可"断点续写"（resume 从检查点继续）；
    * 完成时从事件 output 解析最终草稿（结构异常时回退读取 run 快照）。
    */
-  async function continueActiveChapter(instruction: string) {
+  async function continueActiveChapter(mode: ChapterGenerationMode, instruction: string) {
     if (!bookDetail || !activeChapter) return;
     setChapterContinuing(true);
     setContinueResult(null);
     setChapterError(null);
     setChapterMessage("");
     setLastContinueInstruction(instruction);
+    setLastGenerationMode(mode);
     setContinueRetries(0);
     try {
-      const { runId } = await createContinueRun(bookDetail.id, activeChapter.id, { instruction });
+      const { runId } = await createContinueRun(bookDetail.id, activeChapter.id, { instruction, generationMode: mode });
       setContinueRun({ runId, chapterId: activeChapter.id, status: "running", draft: "", error: null });
       setStreamRefreshKey((key) => key + 1);
     } catch (error) {
@@ -694,7 +696,7 @@ export function EditorPage() {
             setContinueRetries((count) => count + 1);
             const retryChapterId = continueRun.chapterId;
             setContinueRun((current) => current ? { ...current, status: "running", draft: "", error: null } : current);
-            void createContinueRun(bookDetail.id, retryChapterId, { instruction: lastContinueInstruction })
+            void createContinueRun(bookDetail.id, retryChapterId, { instruction: lastContinueInstruction, generationMode: lastGenerationMode })
               .then(({ runId }) => setContinueRun({ runId, chapterId: retryChapterId, status: "running", draft: "", error: null }))
               .catch((error) => setChapterError(`自动重试启动失败：${toMessage(error)}`));
             setStreamRefreshKey((key) => key + 1);
@@ -708,7 +710,7 @@ export function EditorPage() {
         case "run_completed": {
           setContinueRun((current) => current ? { ...current, status: "completed" } : current);
           // 输出在事件 payload 中；结构异常时回退读取 run 快照（快照字段为 output）
-          const result = resolveContinueResult(event.payload.output);
+          const result = resolveContinueResult(event.payload.output, continueRun.runId);
           if (result) {
             if (!result.chapterId || activeChapterIdRef.current === result.chapterId) {
               setContinueResult(result);
@@ -716,7 +718,7 @@ export function EditorPage() {
             void refreshChapterAfterGeneration(result.chapterId ?? continueRun.chapterId);
           } else if (bookDetail && continueRun) {
             void getRun(continueRun.runId).then((snapshot) => {
-              const fallback = resolveContinueResult((snapshot as { output?: unknown }).output);
+              const fallback = resolveContinueResult((snapshot as { output?: unknown }).output, continueRun.runId);
               if (fallback) {
                 if (!fallback.chapterId || activeChapterIdRef.current === fallback.chapterId) {
                   setContinueResult(fallback);
@@ -754,6 +756,41 @@ export function EditorPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [continueRun?.runId, continueRun?.status, streamRefreshKey, bookDetail?.id]);
+
+  useEffect(() => {
+    if (!observationRunId || !bookDetail) return;
+    let ignore = false;
+    const unsubscribe = subscribeRunEvents(observationRunId, (event) => {
+      if (ignore) return;
+      if (event.type === "run_completed") {
+        setObservationRunId(null);
+        setStorylineRevision((value) => value + 1);
+        setChapterMessage("正文与故事线已更新。");
+        void Promise.all([
+          listChapters(bookDetail.id),
+          getWorkspaceBookDetail(bookDetail.id)
+        ]).then(([list, detail]) => {
+          if (!ignore) {
+            setChapters(list);
+            setBookDetail(detail);
+          }
+        });
+      }
+      if (event.type === "run_failed" || event.type === "run_interrupted") {
+        const reason = typeof event.payload.error === "object" && event.payload.error !== null
+          ? String((event.payload.error as { message?: unknown }).message ?? "未知错误")
+          : String(event.payload.error ?? event.payload.reason ?? "未知错误");
+        setObservationRunId(null);
+        setChapterError(`正文已保存，但故事线更新失败：${reason}`);
+      }
+    }, () => {
+      if (!ignore) setChapterMessage("正文已保存，故事线更新事件流正在重连...");
+    }, { afterSeq: -1 });
+    return () => {
+      ignore = true;
+      unsubscribe();
+    };
+  }, [observationRunId, bookDetail?.id]);
 
   /** 删除章节：删除后刷新列表并回到章节空态（已发布章节会被后端拒绝）。 */
   async function deleteActiveChapter() {
@@ -966,7 +1003,7 @@ export function EditorPage() {
             ))}
           </div>
 
-          {activeTab === "chapters" ? <StorylinePanel bookId={bookDetail.id} /> : null}
+          {activeTab === "chapters" ? <StorylinePanel bookId={bookDetail.id} refreshKey={storylineRevision} /> : null}
         </aside>
 
         <main className="novel-editor-center" aria-label="当前作品内容与 AI 会话">
@@ -983,8 +1020,8 @@ export function EditorPage() {
               chapterError={chapterError}
               streamedDraft={isActiveChapterRun ? continueRun?.draft ?? "" : ""}
               runInterrupted={Boolean(isActiveChapterRun && (continueRun?.status === "interrupted" || continueRun?.status === "failed"))}
-              onSaveChapter={(patch) => void saveActiveChapter(patch)}
-              onContinueChapter={(instruction) => void continueActiveChapter(instruction)}
+              onAcceptChapter={(runId) => void acceptActiveGeneration(runId)}
+              onContinueChapter={(mode, instruction) => void continueActiveChapter(mode, instruction)}
               onResumeChapter={() => void resumeContinueRun()}
               onDeleteChapter={() => void deleteActiveChapter()}
               onDismissContinueResult={() => setContinueResult(null)}

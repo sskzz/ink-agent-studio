@@ -55,6 +55,33 @@ export function createRunsRoute(services: ApplicationServices) {
     return jsonOk(context, services.runEventStore.listModelAttempts(context.req.param("runId")));
   });
 
+  /** GET /api/v1/runs/:runId/artifacts：读取该 Run 已持久化的阶段产物。 */
+  route.get("/runs/:runId/artifacts", (context) => {
+    return jsonOk(context, services.runEventStore.listArtifacts(context.req.param("runId")));
+  });
+
+  /** 聚合知识注入来源、Prompt 估算、实际 Token/费用与修订差异。 */
+  route.get("/runs/:runId/knowledge-observability", (context) => {
+    const runId = context.req.param("runId");
+    const artifacts = services.runEventStore.listArtifacts(runId);
+    const attempts = services.runEventStore.listModelAttempts(runId);
+    const artifact = [...artifacts].reverse().find((item) => item.artifactType === "knowledge-observability.v1");
+    const completed = attempts.filter((attempt) => attempt.status === "completed");
+    return jsonOk(context, {
+      schemaVersion: "knowledge-observability-summary.v1",
+      runId,
+      observability: artifact?.inlineJson ?? null,
+      modelAttempts: completed,
+      actualUsage: {
+        promptTokens: sumNullable(completed.map((attempt) => attempt.promptTokens)),
+        completionTokens: sumNullable(completed.map((attempt) => attempt.completionTokens)),
+        totalTokens: sumNullable(completed.map((attempt) => attempt.totalTokens)),
+        estimatedCostMicros: sumNullable(completed.map((attempt) => attempt.estimatedCostMicros)),
+        currencies: [...new Set(completed.map((attempt) => attempt.costCurrency).filter((value): value is string => Boolean(value)))]
+      }
+    });
+  });
+
   /**
    * POST /api/v1/runs/:runId/cancel：请求取消 Run（幂等）。
    */
@@ -74,6 +101,17 @@ export function createRunsRoute(services: ApplicationServices) {
    */
   route.post("/runs/:runId/resume", async (context) => {
     const run = await services.runCoordinator.resume(context.req.param("runId"));
+    return jsonOk(context, {
+      runId: run.id,
+      status: "queued" as const,
+      eventsUrl: `/api/v1/runs/${run.id}/events`,
+      acceptedAt: run.updatedAt
+    }, "运行已重新进入队列", 202);
+  });
+
+  /** POST /api/v1/runs/:runId/retry：重试失败、取消或中断的 Run，并复用 Artifact。 */
+  route.post("/runs/:runId/retry", async (context) => {
+    const run = await services.runCoordinator.retry(context.req.param("runId"));
     return jsonOk(context, {
       runId: run.id,
       status: "queued" as const,
@@ -118,6 +156,11 @@ export function createRunsRoute(services: ApplicationServices) {
   });
 
   return route;
+}
+
+function sumNullable(values: Array<number | null>) {
+  const present = values.filter((value): value is number => value !== null);
+  return present.length > 0 ? present.reduce((sum, value) => sum + value, 0) : null;
 }
 
 /**

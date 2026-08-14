@@ -9,9 +9,9 @@ import { buildEntityNameMap, readRuntimeState } from "./runtimeStateRepository.j
 import { listEntities } from "./entityService.js";
 
 /** 未回收的短期伏笔（planned/planted/resolving，排除已 resolved）。 */
-export const ACTIVE_FORESHADOWING_STATUSES = ["planned", "planted", "resolving"] as const;
+export const ACTIVE_FORESHADOWING_STATUSES = ["planned", "planted", "advancing", "resolving"] as const;
 export type ActiveForeshadowingStatus = (typeof ACTIVE_FORESHADOWING_STATUSES)[number];
-export type ForeshadowingStatus = ActiveForeshadowingStatus | "resolved";
+export type ForeshadowingStatus = ActiveForeshadowingStatus | "resolved" | "archived";
 
 /** 阶段剧情进度：卷 / 章 维度的推进位置。 */
 export interface StorylineStageProgress {

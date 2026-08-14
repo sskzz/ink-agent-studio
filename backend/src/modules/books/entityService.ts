@@ -14,6 +14,7 @@ import { resolveInsideRoot } from "../../utils/safePath.js";
 import type { WorkspacePaths } from "../workspace/workspacePaths.js";
 import { createBookPaths } from "./bookPaths.js";
 import { getBook } from "./bookRepository.js";
+import { normalizeCharacterProfile, readCharacterProfile } from "./storyKnowledgeRepository.js";
 
 /** 实体类型到作品目录的映射。 */
 function getEntityDir(workspacePaths: WorkspacePaths, bookId: string, entityType: EntityType) {
@@ -37,6 +38,26 @@ const entityTypeLabels: Record<EntityType, string> = {
 
 /** 生成实体的 Markdown 文件内容（名称/类型/定位/描述）。 */
 function createEntityMarkdown(entity: BookEntityRecord) {
+  const profile = readCharacterProfile(entity);
+  const characterProfile = profile ? `
+## 五层角色档案
+### 基础档案
+- 外貌：${profile.core.appearance || "待补充"}
+- 性格：${profile.core.personalityTraits.join("；") || "待补充"}
+- 动机：${profile.core.motivations.join("；") || "待补充"}
+- 禁止行为：${profile.core.prohibitedActions.join("；") || "无"}
+
+### 成长轨迹
+- 起点：${profile.arc.startState || "待补充"}
+- 目标：${profile.arc.targetState || "待补充"}
+
+### 时间线当前状态
+${profile.timeline.currentState || "待补充"}
+
+### 对话 DNA
+- 声线：${profile.dialogueDna.voice || "待补充"}
+- 节奏：${profile.dialogueDna.sentenceRhythm || "待补充"}
+` : "";
   return `# ${entity.name}
 
 ## 类型
@@ -47,6 +68,7 @@ ${entity.role || "待补充"}
 
 ## 描述
 ${entity.description || "待补充"}
+${characterProfile}
 `;
 }
 
@@ -159,6 +181,7 @@ export async function saveEntity(workspacePaths: WorkspacePaths, bookId: string,
   const fileName = `${id}.md`;
   const filePath = `entities/${input.entityType}s/${fileName}`;
 
+  const mergedAttributes = { ...(existing?.attributes ?? {}), ...input.attributes };
   const entity: BookEntityRecord = {
     id,
     bookId,
@@ -167,7 +190,17 @@ export async function saveEntity(workspacePaths: WorkspacePaths, bookId: string,
     role: input.role,
     description: input.description,
     fileId: existing?.fileId ?? `entity-${id}`,
-    attributes: input.attributes,
+    attributes: input.entityType === "character"
+      ? {
+          ...mergedAttributes,
+          profile: normalizeCharacterProfile(mergedAttributes, {
+            description: input.description,
+            state: existing && existing.entityType === "character"
+              ? readCharacterProfile(existing)?.timeline.currentState
+              : undefined
+          })
+        }
+      : mergedAttributes,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now
   };

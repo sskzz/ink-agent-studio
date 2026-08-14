@@ -53,13 +53,15 @@ export function createApplicationServices(paths = createWorkspacePaths()): Appli
   const configService = new ConfigService(new ConfigRepository(paths));
   const runEventStore = new RunEventStore(runtimeDatabase, runEventHub);
   const patchService = new PatchService(paths, new PatchRepository(runtimeDatabase), runEventStore, configService);
+  const runCoordinator = new RunCoordinator(configService, runEventStore, {});
+  runCoordinator.setHandlers(createRunCommandHandlers(paths, runCoordinator));
   return {
     paths,
     configService,
     runtimeDatabase,
     runEventHub,
     runEventStore,
-    runCoordinator: new RunCoordinator(configService, runEventStore, createRunCommandHandlers(paths)),
+    runCoordinator,
     legacyRunImporter: new LegacyRunImporter(runtimeDatabase, paths),
     patchService,
     toolRegistry: createNovelToolRegistry(),

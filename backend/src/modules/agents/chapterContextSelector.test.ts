@@ -6,6 +6,7 @@ import type { BookEntityRecord } from "../../types/domain.js";
 import type { RuntimeState } from "../../schemas/runtimeStateSchemas.js";
 import { selectChapterContext } from "./chapterContextSelector.js";
 import type { BookGenerationMetadata } from "./bookGenerationMetadata.js";
+import { createInitialStoryPlan, createInitialWorldRuleRegistry } from "../books/storyKnowledgeRepository.js";
 
 /** 构造检索输入夹具：包含苏见/陈栀两个实体与对应状态/伏笔。 */
 function createInputFixture(overrides: Partial<Parameters<typeof selectChapterContext>[0]> = {}) {
@@ -142,5 +143,24 @@ describe("selectChapterContext", () => {
     expect(ids).toContain("entity-chen-zhi");
     expect(ids).not.toContain("foreshadowing-hook-chen");
     expect(selection.matchedEntityIds.length).toBeGreaterThan(0);
+  });
+
+  it("只注入当前卷、当前章五维、命中角色档案和有效世界规则，不全量注入千章规划", () => {
+    const plan = createInitialStoryPlan("book-1", {
+      mainLine: "测试主线", estimatedChapters: 50,
+      volumes: [{ title: "第一卷", goal: "卷目标", conflict: "卷冲突", turningPoint: "卷转折", climax: "卷高潮", resolution: "卷收束", characterChanges: [] }],
+      terms: []
+    });
+    plan.chapters.push({
+      chapterNo: 1, volumeNo: 1, title: "第一章", status: "approved", reviewNotes: [], lockedTermIds: [],
+      dimensions: { synopsis: "苏见追查异常", characterActions: [{ characterId: "su-jian", action: "观察异常" }], scenes: ["教室"], conflicts: ["不敢暴露能力"], narrativeGoals: ["建立谜团"] }
+    });
+    const rules = createInitialWorldRuleRegistry("book-1", [{ id: "ability-law", title: "观测限制", content: "能力只能读取不能改写", category: "law", mutability: "immutable" }]);
+    const selection = selectChapterContext(createInputFixture({ chapterNo: 1, storyPlan: plan, worldRules: rules }));
+    const ids = selection.sources.map((source) => source.id);
+    expect(ids).toContain("chapter-plan-1");
+    expect(ids).toContain("volume-plan-1");
+    expect(ids).toContain("effective-world-rules");
+    expect(selection.sources.find((source) => source.id === "chapter-plan-1")?.content).toContain("角色行为：su-jian=观察异常");
   });
 });

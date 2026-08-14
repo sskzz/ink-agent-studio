@@ -18,6 +18,16 @@ export interface BookPaths {
   currentStateFile: string;
   foreshadowingFile: string;
   runtimeStateFile: string;
+  /** 三层大纲的结构化权威源；outline.md 仅为人类可读投影。 */
+  storyPlanFile: string;
+  /** 世界规则与剧情演进提案的结构化权威源；world.md 仅为人类可读投影。 */
+  worldRulesFile: string;
+  /** 旧作品知识回填提案；独立于权威知识文件，应用前可重复审阅。 */
+  legacyKnowledgeBackfillFile: string;
+  /** 知识变更前快照目录；用于回填应用和后续人工知识变更审计。 */
+  knowledgeSnapshotsDir: string;
+  /** 语义知识疑点的人工确认/豁免记录。 */
+  knowledgeAuditDecisionsFile: string;
   authorIntentFile: string;
   currentFocusFile: string;
   chaptersDir: string;
@@ -50,6 +60,11 @@ export function createBookPaths(workspacePaths: WorkspacePaths, bookId: string):
     currentStateFile: resolveInsideRoot(stateDir, "current.md"),
     foreshadowingFile: resolveInsideRoot(stateDir, "foreshadowing.md"),
     runtimeStateFile: resolveInsideRoot(stateDir, "runtime.json"),
+    storyPlanFile: resolveInsideRoot(stateDir, "story-plan.json"),
+    worldRulesFile: resolveInsideRoot(stateDir, "world-rules.json"),
+    legacyKnowledgeBackfillFile: resolveInsideRoot(stateDir, "legacy-knowledge-backfill.json"),
+    knowledgeSnapshotsDir: resolveInsideRoot(stateDir, "knowledge-snapshots"),
+    knowledgeAuditDecisionsFile: resolveInsideRoot(stateDir, "knowledge-audit-decisions.json"),
     authorIntentFile: resolveInsideRoot(stateDir, "author_intent.md"),
     currentFocusFile: resolveInsideRoot(stateDir, "current_focus.md"),
     chaptersDir: resolveInsideRoot(bookDir, "chapters"),

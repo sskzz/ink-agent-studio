@@ -7,6 +7,7 @@ import {
   BookOpenText,
   ClipboardList,
   Fingerprint,
+  GitFork,
   LibraryBig,
   Palette,
   Settings,
@@ -74,6 +75,14 @@ export const navigationItems: NavigationItem[] = [
     section: "创作",
     eyebrow: "User Memory",
     description: "审批稳定的写作协作偏好，并预览实际提示词注入内容。"
+  },
+  {
+    to: "/knowledge",
+    label: "作品知识",
+    icon: GitFork,
+    section: "创作",
+    eyebrow: "Story Knowledge",
+    description: "管理三层大纲、人物五层档案、世界规则和伏笔生命周期。"
   },
   {
     to: "/models",

@@ -57,9 +57,8 @@ async function requestChatCompletions(config: ModelConfigRecord, apiKey: string,
       { role: "user", content: input.userPrompt }
     ],
     temperature: input.temperature ?? 0.25,
-    // 思考模式（DeepSeek V4）下 max_tokens 同时包含推理与正文：为推理预留 4K 头寸，
-    // 避免思考吃满预算导致结构化 JSON 被 finish_reason=length 截断。
-    max_tokens: (input.maxTokens ?? 2800) + (thinkingBody?.thinking.type === "enabled" ? 4_096 : 0),
+    // max_tokens 已由模型网关统一计入正文输出与思考预留，adapter 不再暗加预算。
+    max_tokens: input.maxTokens ?? 2800,
     ...(input.stream ? { stream: true } : {}),
     ...(input.responseFormat === "json_object" ? { response_format: { type: "json_object" } } : {}),
     ...(input.stream && config.provider !== "ollama" ? { stream_options: { include_usage: true } } : {}),

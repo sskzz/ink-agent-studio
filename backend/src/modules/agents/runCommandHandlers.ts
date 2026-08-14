@@ -4,8 +4,16 @@ import type { WorkspacePaths } from "../workspace/workspacePaths.js";
 import { initializeBookWithAi } from "./bookInitializationService.js";
 import type { RunExecutionContext, RunCommandHandler } from "./runCoordinator.js";
 import { chapterAiTaskInputSchema } from "../../schemas/chapterSchemas.js";
-import { prepareChapterRunInput, runChapterPipeline } from "../books/chapterService.js";
+import {
+  markChapterObservationFailed,
+  observeSavedChapter,
+  prepareChapterRunInput,
+  runChapterPipeline
+} from "../books/chapterService.js";
 import { consistencyCheck } from "../review/reviewService.js";
+import type { RunCoordinator } from "./runCoordinator.js";
+import { enqueueNextChapterStateObservation } from "../books/chapterService.js";
+import { generateStoryPlanBatch } from "../books/storyPlanService.js";
 
 /**
  * Run 命令处理器注册表（文件职责）。
@@ -15,7 +23,7 @@ import { consistencyCheck } from "../review/reviewService.js";
  * emitDelta 桥接 SSE model_delta（前端实时显示生成正文）。
  * 每个处理器先校验命令类型与中止信号，避免对已取消的运行继续发起模型调用。
  */
-export function createRunCommandHandlers(paths: WorkspacePaths): Record<RunCommand["type"], RunCommandHandler> {
+export function createRunCommandHandlers(paths: WorkspacePaths, runCoordinator?: RunCoordinator): Record<RunCommand["type"], RunCommandHandler> {
   return {
     async continue_chapter(context) {
       const command = narrowCommand(context, "continue_chapter");
@@ -30,8 +38,40 @@ export function createRunCommandHandlers(paths: WorkspacePaths): Record<RunComma
         streamDeltas: true,
         emitDelta: (delta) => context.emitDelta(delta),
         saveArtifact: (artifactType, value) => context.saveArtifact(artifactType, value),
-        loadArtifact: (artifactType) => context.loadArtifact(artifactType)
+        loadArtifact: (artifactType) => context.loadArtifact(artifactType),
+        addTokenUsage: (key, value) => context.addTokenUsage?.(key, value),
+        mergeTrace: (value) => context.mergeTrace?.(value)
       });
+    },
+    async observe_chapter(context) {
+      const command = narrowCommand(context, "observe_chapter");
+      context.signal.throwIfAborted();
+      let result: Awaited<ReturnType<typeof observeSavedChapter>>;
+      try {
+        result = await observeSavedChapter(paths, command.bookId, command.chapterId, {
+          setStage: (stage) => context.setStage(stage),
+          markCommitted: () => context.markCommitted?.(),
+          sourceRunId: command.input.sourceRunId,
+          expectedRevision: command.input.chapterRevision,
+          expectedContentHash: command.input.contentHash,
+          expectedObservationRunId: context.runId
+        });
+      } catch (error) {
+        await markChapterObservationFailed(
+          paths,
+          command.bookId,
+          command.chapterId,
+          error,
+          command.input.chapterRevision,
+          command.input.contentHash,
+          context.runId
+        ).catch(() => undefined);
+        throw error;
+      }
+      if (runCoordinator) {
+        await enqueueNextChapterStateObservation(paths, runCoordinator, command.bookId).catch(() => undefined);
+      }
+      return result;
     },
     async review_chapter(context) {
       const command = narrowCommand(context, "review_chapter");
@@ -56,6 +96,19 @@ export function createRunCommandHandlers(paths: WorkspacePaths): Record<RunComma
       narrowCommand(context, "initialize_book");
       context.signal.throwIfAborted();
       return initializeBookWithAi(paths, context);
+    },
+    async generate_story_plan_batch(context) {
+      const command = narrowCommand(context, "generate_story_plan_batch");
+      context.signal.throwIfAborted();
+      return generateStoryPlanBatch(paths, command.bookId, command.input.batchNo, {
+        signal: context.signal,
+        setStage: (stage) => context.setStage(stage),
+        emitProgress: (payload) => context.emitProgress(payload),
+        saveArtifact: (artifactType, value) => context.saveArtifact(artifactType, value),
+        loadArtifact: (artifactType) => context.loadArtifact(artifactType),
+        saveCheckpoint: (stage, checkpoint, resumable) => context.saveCheckpoint(stage, checkpoint, resumable),
+        markCommitted: () => context.markCommitted?.()
+      });
     }
   };
 }

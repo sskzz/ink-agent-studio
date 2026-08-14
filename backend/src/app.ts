@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { createAiRoute } from "./routes/ai.js";
 import { createBooksRoute } from "./routes/books.js";
-import { chaptersRoute } from "./routes/chapters.js";
+import { createChaptersRoute } from "./routes/chapters.js";
 import { entitiesRoute } from "./routes/entities.js";
 import { filesRoute } from "./routes/files.js";
 import { healthRoute } from "./routes/health.js";
@@ -20,6 +20,7 @@ import { createSessionsRoute } from "./routes/sessions.js";
 import { createSkillsRoute } from "./routes/skills.js";
 import { createMemoryRoute } from "./routes/memory.js";
 import { createChatRoute } from "./routes/chat.js";
+import { createStoryKnowledgeRoute } from "./routes/storyKnowledge.js";
 
 /**
  * Hono 应用装配。
@@ -74,7 +75,7 @@ export function createApp(services: ApplicationServices = createApplicationServi
   app.route("/api/v1/workspace", workspaceRoute);
   app.route("/api/v1", createAiRoute(services));
   app.route("/api/v1", createBooksRoute(services));
-  app.route("/api/v1", chaptersRoute);
+  app.route("/api/v1", createChaptersRoute(services));
   app.route("/api/v1", entitiesRoute);
   app.route("/api/v1", filesRoute);
   app.route("/api/v1", modelsRoute);
@@ -87,6 +88,7 @@ export function createApp(services: ApplicationServices = createApplicationServi
   app.route("/api/v1", antiAiConstraintsRoute);
   app.route("/api/v1", createSettingsRoute(services.configService));
   app.route("/api/v1", createChatRoute(services));
+  app.route("/api/v1", createStoryKnowledgeRoute(services));
 
   app.notFound((context) => jsonError(context, 14040, "接口不存在", 404));
 

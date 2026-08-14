@@ -49,19 +49,15 @@ const modelPricingSchema = z.object({
  * 模型能力字典：任意键值对，但其中 pricing 必须满足 modelPricingSchema。
  * 用 superRefine 而非嵌套对象，是为了兼容旧数据中能力项的任意扩展。
  */
-export const modelCapabilitiesSchema = z.record(z.unknown()).superRefine((value, context) => {
-  if (value.pricing === undefined) return;
-  const pricing = modelPricingSchema.safeParse(value.pricing);
-  if (!pricing.success) {
-    for (const issue of pricing.error.issues) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["pricing", ...issue.path],
-        message: issue.message
-      });
-    }
-  }
-});
+export const modelCapabilitiesSchema = z.object({
+  contextWindow: z.number().int().min(4_096).optional(),
+  maxOutputTokens: z.number().int().min(256).optional(),
+  reasoningReserveTokens: z.number().int().nonnegative().optional(),
+  supportsThinking: z.boolean().optional(),
+  supportsJsonSchema: z.boolean().optional(),
+  supportsStreaming: z.boolean().optional(),
+  pricing: modelPricingSchema.optional()
+}).catchall(z.unknown());
 
 /**
  * 兼容旧字段别名：旧配置可能用 model 字段表示模型名，读取时统一回填为 apiModel。

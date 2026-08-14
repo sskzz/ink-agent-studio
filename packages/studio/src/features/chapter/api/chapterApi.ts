@@ -5,6 +5,7 @@
  */
 import { apiDelete, apiGet, apiPost, apiPut } from "@/shared/api/http";
 import { ApiError } from "@/shared/api/http";
+import type { ChapterGenerationMode } from "@ink-agent/contracts";
 
 /** 章节索引条目（不含正文），与后端 chapterRecordSchema 对应。 */
 export interface ChapterSummary {
@@ -51,6 +52,7 @@ export interface ChapterContinueInput {
   selectedContextFileIds?: string[];
   sceneType?: string;
   allowDegradedStyle?: boolean;
+  generationMode: ChapterGenerationMode;
 }
 
 /** 降级原因条目：code 为机器码，message 为可读说明，recoverable 表示是否可恢复。 */
@@ -60,19 +62,63 @@ export interface DegradationReason {
   recoverable?: boolean;
 }
 
+export interface ChapterKnowledgeAuditIssue {
+  code: string;
+  message: string;
+  sourceId: string;
+  evidence?: string;
+}
+
+export interface ChapterKnowledgeAuditReport {
+  schemaVersion: "chapter-knowledge-audit.v1";
+  passed: boolean;
+  blockingIssues: ChapterKnowledgeAuditIssue[];
+  warnings: Array<{ code: string; message: string; sourceId: string }>;
+}
+
+export interface ChapterKnowledgeAuditResult {
+  initial: ChapterKnowledgeAuditReport;
+  final: ChapterKnowledgeAuditReport;
+  semantic?: {
+    schemaVersion: "chapter-semantic-knowledge-audit.v1";
+    passed: boolean;
+    triggered: boolean;
+    degradedReason: string | null;
+    issues: Array<{
+      code: string;
+      severity: "warning" | "blocking";
+      effectiveSeverity: "warning" | "blocking";
+      sourceId: string;
+      evidence: string;
+      reason: string;
+      confidence: number;
+      fingerprint: string;
+      decision: "confirmed" | "exempted" | null;
+    }>;
+  };
+  passed?: boolean;
+  revisionCount: number;
+}
+
 /** AI 续写结果（从运行快照的 outputJson.output 扁平化而来，供编辑面板展示）。 */
 export interface ChapterContinueResult {
+  runId: string;
   chapterId?: string;
   /** 模型生成的待确认草稿（未写入章节正文）。 */
   draft: string;
   /** 本轮正文实际遵循的细纲；生成阶段会优先使用 AI 细纲，失败时回退静态细纲。 */
   chapterOutline?: string;
-  /** 细纲来源：generated=本轮 AI 细纲，existing=章节已有细纲，none=无细纲降级。 */
-  outlineSource?: "generated" | "existing" | "none";
+  /** 细纲来源：generated=本轮 AI 细纲，existing=章节已有细纲。 */
+  outlineSource?: "generated" | "existing";
+  outlineHash: string;
+  generationMode: ChapterGenerationMode;
+  writeStrategy: "append" | "replace";
   /** 模型为章节拟定的标题（仅当章节尚无自定义标题时生成，可为空）。 */
   chapterTitle?: string | null;
   /** 自动修订次数：0 表示未修订，1 表示已自动修订并复检。 */
   revisionCount?: number;
+  /** 生成后的作品知识硬约束审核；final.passed=false 时后端禁止采纳。 */
+  knowledgeAudit?: ChapterKnowledgeAuditResult;
   /** 生成/审稿过程的警告信息。 */
   warnings: string[];
   /** 是否发生了任何降级（风格版本回退/审稿失败等）。 */
@@ -120,8 +166,12 @@ interface ContinueRunEnvelope {
     chapterId?: string;
     draft?: string;
     chapterOutline?: string;
-    outlineSource?: "generated" | "existing" | "none";
+    outlineSource?: "generated" | "existing";
+    outlineHash?: string;
+    generationMode?: ChapterGenerationMode;
+    writeStrategy?: "append" | "replace";
     revisionCount?: number;
+    knowledgeAudit?: ChapterKnowledgeAuditResult;
     warnings?: string[];
     degraded?: boolean;
     degradationReasons?: DegradationReason[];
@@ -150,15 +200,22 @@ export async function createContinueRun(bookId: string, chapterId: string, input
  * 从续写 Run 快照中解析扁平化的续写结果（run_completed 事件的 output 或 getRun 的 outputJson）。
  * 兼容两种形态：pipeline 直接输出（{ chapterId, draft, ... }）或嵌套 { output: {...}, trace: {...} }。
  */
-export function resolveContinueResult(value: unknown): ChapterContinueResult | null {
+export function resolveContinueResult(value: unknown, runId = ""): ChapterContinueResult | null {
   if (typeof value !== "object" || value === null) return null;
   const root = value as Record<string, unknown>;
   const output = root.outputJson ?? root.output ?? root;
   const draft = typeof output === "object" && output !== null
     ? (output as Record<string, unknown>).draft
     : undefined;
-  if (typeof draft !== "string") return null;
+  const outputRecord = typeof output === "object" && output !== null ? output as Record<string, unknown> : null;
+  const outlineHash = outputRecord?.outlineHash;
+  const generationMode = outputRecord?.generationMode;
+  const writeStrategy = outputRecord?.writeStrategy;
+  if (typeof draft !== "string" || typeof outlineHash !== "string"
+    || !["generate", "continue", "regenerate"].includes(String(generationMode))
+    || !["append", "replace"].includes(String(writeStrategy))) return null;
   return {
+    runId,
     chapterId: typeof root.chapterId === "string"
       ? root.chapterId
       : typeof output === "object" && output !== null && typeof (output as Record<string, unknown>).chapterId === "string"
@@ -172,12 +229,16 @@ export function resolveContinueResult(value: unknown): ChapterContinueResult | n
       ? (output as Record<string, unknown>).chapterOutline as string | undefined
       : undefined,
     outlineSource: typeof output === "object" && output !== null
-      && ["generated", "existing", "none"].includes(String((output as Record<string, unknown>).outlineSource))
-      ? (output as Record<string, unknown>).outlineSource as "generated" | "existing" | "none"
+      && ["generated", "existing"].includes(String((output as Record<string, unknown>).outlineSource))
+      ? (output as Record<string, unknown>).outlineSource as "generated" | "existing"
       : undefined,
+    outlineHash,
+    generationMode: generationMode as ChapterGenerationMode,
+    writeStrategy: writeStrategy as "append" | "replace",
     revisionCount: typeof output === "object" && output !== null
       ? (output as Record<string, unknown>).revisionCount as number | undefined
       : undefined,
+    knowledgeAudit: outputRecord?.knowledgeAudit as ChapterKnowledgeAuditResult | undefined,
     warnings: Array.isArray(output && (output as Record<string, unknown>).warnings)
       ? (output as Record<string, unknown>).warnings as string[]
       : [],
@@ -196,18 +257,46 @@ export function resolveContinueResult(value: unknown): ChapterContinueResult | n
 export async function continueChapter(bookId: string, chapterId: string, input: ChapterContinueInput): Promise<ChapterContinueResult> {
   const run = await apiPost<ContinueRunEnvelope>(`/books/${bookId}/chapters/${chapterId}/continue`, input);
   const output = run.outputJson;
-  if (!output || typeof output.draft !== "string") {
+  if (!output || typeof output.draft !== "string" || !output.outlineHash || !output.generationMode || !output.writeStrategy) {
     throw new Error(`AI 续写返回结构异常${run.status ? `（运行状态：${run.status}）` : ""}`);
   }
   return {
+    runId: run.runId ?? "",
     chapterId: output.chapterId,
     draft: output.draft,
     chapterOutline: output.chapterOutline,
     outlineSource: output.outlineSource,
+    outlineHash: output.outlineHash,
+    generationMode: output.generationMode,
+    writeStrategy: output.writeStrategy,
     revisionCount: output.revisionCount,
+    knowledgeAudit: output.knowledgeAudit,
     warnings: output.warnings ?? [],
     degraded: output.degraded ?? false,
     degradationReasons: output.degradationReasons ?? [],
     note: output.note
   };
+}
+
+export interface ChapterAcceptGenerationResult {
+  chapter: ChapterDetail;
+  observation: { runId: string; status: "queued"; eventsUrl: string; acceptedAt: string };
+}
+
+export function acceptChapterGeneration(bookId: string, chapterId: string, runId: string) {
+  return apiPost<ChapterAcceptGenerationResult>(`/books/${bookId}/chapters/${chapterId}/accept-generation`, { runId });
+}
+
+export function decideKnowledgeAuditIssue(
+  bookId: string,
+  issue: NonNullable<ChapterKnowledgeAuditResult["semantic"]>["issues"][number],
+  decision: "confirmed" | "exempted",
+  reason: string
+) {
+  return apiPut(`/books/${bookId}/knowledge-audit-decisions/${issue.fingerprint}`, {
+    decision,
+    reason,
+    issueCode: issue.code,
+    sourceId: issue.sourceId
+  });
 }

@@ -1,26 +1,25 @@
 import { Hono } from "hono";
 import {
+  acceptChapterGeneration,
   continueChapter,
   createChapter,
   deleteChapter,
   getChapter,
   listChapters,
+  scheduleChapterStateRebuild,
   updateChapter
 } from "../modules/books/chapterService.js";
+import type { ApplicationServices } from "../runtime/applicationServices.js";
 import { polishChapter, reviewChapter } from "../modules/review/reviewService.js";
-import { createWorkspacePaths } from "../modules/workspace/workspacePaths.js";
 import { jsonOk } from "../utils/http.js";
 
 /**
  * 章节路由。
  * 提供章节 CRUD 与 AI 续写 / 审稿 / 润色三个操作接口。
  */
-export const chaptersRoute = new Hono();
-
-/** 使用默认工作区路径（与 workspace 启动配置一致）。 */
-function paths() {
-  return createWorkspacePaths();
-}
+export function createChaptersRoute(services: ApplicationServices) {
+const chaptersRoute = new Hono();
+const paths = () => services.paths;
 
 /**
  * GET /api/v1/books/:bookId/chapters：章节列表。
@@ -33,7 +32,12 @@ chaptersRoute.get("/books/:bookId/chapters", async (context) => {
  * POST /api/v1/books/:bookId/chapters：新建章节，入参校验失败 → 400。
  */
 chaptersRoute.post("/books/:bookId/chapters", async (context) => {
-  return jsonOk(context, await createChapter(paths(), context.req.param("bookId"), await context.req.json()), "章节已创建", 201);
+  const bookId = context.req.param("bookId");
+  const chapter = await createChapter(paths(), bookId, await context.req.json());
+  const observations = chapter.stateSyncStatus === "pending"
+    ? await scheduleChapterStateRebuild(paths(), services.runCoordinator, bookId, chapter.chapterNo)
+    : [];
+  return jsonOk(context, { ...chapter, stateRebuild: observations }, "章节已创建", 201);
 });
 
 /**
@@ -47,11 +51,29 @@ chaptersRoute.get("/books/:bookId/chapters/:chapterId", async (context) => {
  * PUT /api/v1/books/:bookId/chapters/:chapterId：保存章节（标题/大纲/正文全量替换）。
  */
 chaptersRoute.put("/books/:bookId/chapters/:chapterId", async (context) => {
+  const bookId = context.req.param("bookId");
+  const chapterId = context.req.param("chapterId");
+  const before = await getChapter(paths(), bookId, chapterId);
+  const chapter = await updateChapter(paths(), bookId, chapterId, await context.req.json());
+  const observations = chapter.revision !== before.revision
+    ? await scheduleChapterStateRebuild(paths(), services.runCoordinator, bookId, chapter.chapterNo)
+    : [];
   return jsonOk(
     context,
-    await updateChapter(paths(), context.req.param("bookId"), context.req.param("chapterId"), await context.req.json()),
+    { ...chapter, stateRebuild: observations },
     "章节已保存"
   );
+});
+
+chaptersRoute.post("/books/:bookId/chapters/:chapterId/accept-generation", async (context) => {
+  return jsonOk(context, await acceptChapterGeneration(
+    paths(),
+    services.runEventStore,
+    services.runCoordinator,
+    context.req.param("bookId"),
+    context.req.param("chapterId"),
+    await context.req.json()
+  ), "生成结果已采纳，故事线正在更新");
 });
 
 /**
@@ -59,9 +81,12 @@ chaptersRoute.put("/books/:bookId/chapters/:chapterId", async (context) => {
  * 刷新作品进度；已发布章节拒绝删除）。
  */
 chaptersRoute.delete("/books/:bookId/chapters/:chapterId", async (context) => {
+  const bookId = context.req.param("bookId");
+  const deleted = await deleteChapter(paths(), bookId, context.req.param("chapterId"));
+  const observations = await scheduleChapterStateRebuild(paths(), services.runCoordinator, bookId, deleted.chapterNo);
   return jsonOk(
     context,
-    await deleteChapter(paths(), context.req.param("bookId"), context.req.param("chapterId")),
+    { ...deleted, stateRebuild: observations },
     "章节已删除"
   );
 });
@@ -87,3 +112,6 @@ chaptersRoute.post("/books/:bookId/chapters/:chapterId/review", async (context) 
 chaptersRoute.post("/books/:bookId/chapters/:chapterId/polish", async (context) => {
   return jsonOk(context, await polishChapter(paths(), context.req.param("bookId"), context.req.param("chapterId"), await context.req.json()));
 });
+
+return chaptersRoute;
+}

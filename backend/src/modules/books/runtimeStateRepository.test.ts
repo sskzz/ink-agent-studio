@@ -10,6 +10,8 @@ import {
   renderCurrentStateMarkdown,
   renderForeshadowingMarkdown,
   replayRuntimeState
+  ,replaceChapterStateEvent
+  ,invalidateChapterDeltasFrom
 } from "./runtimeStateRepository.js";
 
 /** 构造最小权威状态视图夹具。 */
@@ -82,6 +84,25 @@ describe("runtimeStateRepository", () => {
     expect(afterSecond.chapterSummaries["chapter-0001"]).toBe("第二版");
   });
 
+  it("同章替换 delta 时从 baseline 重放，不保留旧 delta 写入的状态", () => {
+    const state = createBaselineRuntimeState(createViewFixture());
+    const first: StateDelta = {
+      schemaVersion: "book-state-delta.v1",
+      summary: "第一版",
+      characterStates: [{ characterId: "su-jian", state: "第一版新增状态" }]
+    };
+    const second: StateDelta = {
+      schemaVersion: "book-state-delta.v1",
+      summary: "第二版"
+    };
+
+    const afterFirst = applyStateDelta(state, "chapter-0001", first);
+    const afterSecond = applyStateDelta(afterFirst, "chapter-0001", second);
+
+    expect(afterSecond.state.characterStates[0].state).toBe(createViewFixture().characterStates[0].state);
+    expect(afterSecond.chapterSummaries["chapter-0001"]).toBe("第二版");
+  });
+
   it("删除章节时按 delta 序列回滚（排除被删章节的记录）", () => {
     const state = createBaselineRuntimeState(createViewFixture());
     const chapterOne: StateDelta = {
@@ -136,5 +157,34 @@ describe("runtimeStateRepository", () => {
     expect(foreshadowing).toContain("| ID | 伏笔 |");
     expect(foreshadowing).toContain("苏见（su-jian）");
     expect(foreshadowing).toContain("已埋设");
+  });
+
+  it("观察完成顺序乱序时仍按章节号重放，旧章改写可失效全部下游事件", () => {
+    const state = createBaselineRuntimeState(createViewFixture());
+    const afterChapterTwo = replaceChapterStateEvent(state, {
+      chapterId: "chapter-0002",
+      chapterNo: 2,
+      chapterRevision: 1,
+      observationRevision: 1,
+      contentHash: "hash-2",
+      recordedAt: "2026-01-02T00:00:00.000Z",
+      delta: { schemaVersion: "book-state-delta.v1", characterStates: [{ characterId: "su-jian", state: "第二章状态" }] }
+    });
+    const reordered = replaceChapterStateEvent(afterChapterTwo, {
+      chapterId: "chapter-0001",
+      chapterNo: 1,
+      chapterRevision: 1,
+      observationRevision: 1,
+      contentHash: "hash-1",
+      recordedAt: "2026-01-01T00:00:00.000Z",
+      delta: { schemaVersion: "book-state-delta.v1", characterStates: [{ characterId: "su-jian", state: "第一章状态" }] }
+    });
+
+    expect(reordered.deltas.map((item) => item.chapterNo)).toEqual([1, 2]);
+    expect(reordered.state.characterStates[0].state).toBe("第二章状态");
+
+    const invalidated = invalidateChapterDeltasFrom(reordered, 1);
+    expect(invalidated.deltas).toEqual([]);
+    expect(invalidated.state.characterStates[0].state).toBe(createViewFixture().characterStates[0].state);
   });
 });

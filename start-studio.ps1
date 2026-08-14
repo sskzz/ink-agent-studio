@@ -25,10 +25,12 @@ if ($CheckOnly) {
 }
 
 # ---------------------------------------------------------------------------
-# Stale process detection: a leftover backend/Vite process would keep serving
-# OLD code (e.g. the 90s timeout before the streaming fixes), making recent
-# changes invisible. Check the ports before installing dependencies so the
-# user is not kept waiting, and offer to stop the stale process.
+# Stale process detection: a leftover backend/Vite process keeps serving OLD
+# code, and its workspace lease (data/workspaces/*/index/workspace.lock) blocks
+# a fresh backend from starting ("工作区已被另一个后端进程占用"). A duplicate
+# `pnpm dev` session typically leaves tsx watch + its backend child behind.
+# Killing only the child makes the watcher respawn it, so we kill the whole
+# session tree (up to pnpm), never the user's own console/shell.
 # ---------------------------------------------------------------------------
 $backendPort = 8787
 $studioPort = 5173
@@ -45,30 +47,129 @@ function Get-ProcessLabel([int]$ProcessId) {
     return "$($process.ProcessName) (PID $ProcessId)"
 }
 
-function Ensure-PortFree([int]$Port, [string]$ServiceName) {
-    $processId = Get-ListeningProcessId $Port
-    if (-not $processId) { return }
-    Write-Host ""
-    Write-Host "WARNING: Port $Port ($ServiceName) is already in use by $(Get-ProcessLabel $processId)." -ForegroundColor Yellow
-    Write-Host "A stale $ServiceName keeps serving OLD code, which makes recent fixes invisible." -ForegroundColor Yellow
-    $answer = Read-Host "Stop this process and start fresh? (y/N)"
-    if ($answer -ne "y" -and $answer -ne "Y") {
-        Write-Host "Continuing anyway; close the old console window manually if it keeps serving old code." -ForegroundColor DarkGray
-        return
-    }
-    Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 1500
-    $remaining = Get-ListeningProcessId $Port
-    if ($remaining) {
-        Write-Host "Port $Port is still occupied by $(Get-ProcessLabel $remaining)." -ForegroundColor Red
-        Write-Host "The stale process respawned (tsx watch). Please close its old console window manually, then re-run this script." -ForegroundColor Red
-        exit 1
-    }
-    Write-Host "Stopped the stale process; port $Port is free now." -ForegroundColor Green
+# True when the command line points into this project's backend (tsx watch / node src/index.ts).
+function Test-BackendProcess([int]$ProcessId) {
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
+    if (-not $process -or -not $process.CommandLine) { return $false }
+    return $process.CommandLine -match [regex]::Escape($backendDir) -and $process.CommandLine -match "tsx|index\.ts"
 }
 
-Ensure-PortFree $backendPort "backend"
-Ensure-PortFree $studioPort "Studio (Vite)"
+# True when the command line is this project's Vite dev server.
+function Test-StudioProcess([int]$ProcessId) {
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
+    if (-not $process -or -not $process.CommandLine) { return $false }
+    return $process.CommandLine -match [regex]::Escape($studioDir) -and $process.CommandLine -match "vite"
+}
+
+# Ancestors that belong to the user's own shell/console must never be killed.
+$shellNames = @("cmd.exe", "conhost.exe", "powershell.exe", "pwsh.exe", "explorer.exe", "WindowsTerminal.exe", "OpenConsole.exe", "Code.exe")
+
+# Walk up the process tree and return the pid of the session root (e.g. pnpm).
+function Get-ProcessTreeRoot([int]$ProcessId) {
+    $current = Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
+    if (-not $current) { return $null }
+    $guard = 0
+    while ($current.ParentProcessId -and $current.ParentProcessId -ne 0 -and $guard -lt 20) {
+        $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($current.ParentProcessId)" -ErrorAction SilentlyContinue
+        if (-not $parent) { break }
+        if ($parent.Name -in $shellNames) { break }
+        $current = $parent
+        $guard += 1
+    }
+    return $current.ProcessId
+}
+
+# Kill a process and its whole subtree, tolerating an already-dead target.
+function Stop-ProcessTree([int]$ProcessId) {
+    taskkill /PID $ProcessId /T /F 2>&1 | Out-Null
+    Start-Sleep -Milliseconds 300
+}
+
+# PID recorded in the workspace lease file, if any.
+function Get-WorkspaceLockOwnerPid {
+    $lockFiles = Get-ChildItem -LiteralPath (Join-Path $projectRoot "data\workspaces") -Filter "workspace.lock" -Recurse -ErrorAction SilentlyContinue
+    foreach ($lockFile in $lockFiles) {
+        try {
+            $record = Get-Content -Raw -LiteralPath $lockFile.FullName | ConvertFrom-Json
+            if ($record -and $record.pid) { return [int]$record.pid }
+        } catch { }
+    }
+    return $null
+}
+
+# Stop every stale process of ours that would block the backend port or lease.
+function Ensure-BackendFree {
+    $candidates = @()
+    $portPid = Get-ListeningProcessId $backendPort
+    if ($portPid) { $candidates += $portPid }
+    $lockPid = Get-WorkspaceLockOwnerPid
+    if ($lockPid -and $candidates -notcontains $lockPid) { $candidates += $lockPid }
+
+    $ours = @($candidates | Where-Object { Test-BackendProcess $_ })
+    $foreign = @($candidates | Where-Object { -not (Test-BackendProcess $_) })
+
+    if ($ours.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Stale Ink Agent Backend detected (it would block the workspace lease and serve old code):" -ForegroundColor Yellow
+        foreach ($processId in $ours) {
+            Write-Host "  $(Get-ProcessLabel $processId)" -ForegroundColor Yellow
+        }
+        Write-Host "Stopping it together with its watcher/session..." -ForegroundColor Yellow
+        foreach ($processId in $ours) {
+            $root = Get-ProcessTreeRoot $processId
+            if ($root) { Stop-ProcessTree $root }
+        }
+        Start-Sleep -Milliseconds 1500
+    }
+
+    foreach ($processId in $foreign) {
+        Write-Host ""
+        Write-Host "WARNING: Port $backendPort (backend) is already in use by $(Get-ProcessLabel $processId), which does not look like this project's backend." -ForegroundColor Yellow
+        $answer = Read-Host "Stop this process and start fresh? (y/N)"
+        if ($answer -eq "y" -or $answer -eq "Y") {
+            $root = Get-ProcessTreeRoot $processId
+            if ($root) { Stop-ProcessTree $root }
+            Start-Sleep -Milliseconds 1500
+        } else {
+            Write-Host "Continuing anyway; the backend may fail to start on that port." -ForegroundColor DarkGray
+        }
+    }
+
+    $remaining = Get-ListeningProcessId $backendPort
+    if ($remaining) {
+        Write-Host "Port $backendPort is still occupied by $(Get-ProcessLabel $remaining); close its console manually and re-run this script." -ForegroundColor Red
+        exit 1
+    }
+}
+
+# Stop a stale Studio (Vite) dev server; only ask when the port is held by a foreign process.
+function Ensure-StudioFree {
+    $processId = Get-ListeningProcessId $studioPort
+    if (-not $processId) { return }
+
+    if (Test-StudioProcess $processId) {
+        Write-Host ""
+        Write-Host "Stale Studio (Vite) dev server detected on port $studioPort (serving old code); stopping it..." -ForegroundColor Yellow
+        $root = Get-ProcessTreeRoot $processId
+        if ($root) { Stop-ProcessTree $root }
+        Start-Sleep -Milliseconds 1500
+        return
+    }
+
+    Write-Host ""
+    Write-Host "WARNING: Port $studioPort (Studio) is already in use by $(Get-ProcessLabel $processId), which does not look like this project's Vite." -ForegroundColor Yellow
+    $answer = Read-Host "Stop this process and start fresh? (y/N)"
+    if ($answer -eq "y" -or $answer -eq "Y") {
+        $root = Get-ProcessTreeRoot $processId
+        if ($root) { Stop-ProcessTree $root }
+        Start-Sleep -Milliseconds 1500
+    } else {
+        Write-Host "Continuing anyway; close the old console window manually if it keeps serving old code." -ForegroundColor DarkGray
+    }
+}
+
+Ensure-BackendFree
+Ensure-StudioFree
 
 $hasWorkspaceDependencies = Test-Path -LiteralPath $workspaceNodeModules
 if (-not $hasWorkspaceDependencies) {

@@ -103,13 +103,13 @@ export function createBooksRoute(services: ApplicationServices) {
 
   /**
    * DELETE /api/v1/books/:bookId：删除作品。
-   * 先取消该作品所有进行中的初始化 Run（避免删除后 Run 继续写已不存在的目录），再删除磁盘数据。
+   * 先取消该作品所有进行中的写任务（避免删除后 Run 继续写已不存在的目录），再删除磁盘数据。
    */
   route.delete("/books/:bookId", async (context) => {
     const bookId = context.req.param("bookId");
     if (services.runtimeDatabase.initialized) {
       for (const run of services.runEventStore.listRuns({ bookId, limit: 20 })) {
-        if (run.command.type === "initialize_book" && ["queued", "running", "cancelling"].includes(run.status)) {
+        if (["queued", "running", "cancelling"].includes(run.status)) {
           services.runCoordinator.cancel(run.id);
         }
       }

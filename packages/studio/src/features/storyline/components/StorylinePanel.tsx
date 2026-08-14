@@ -15,7 +15,7 @@ const foreshadowingLabels: Record<string, string> = {
   resolved: "已回收"
 };
 
-export function StorylinePanel({ bookId }: { bookId: string }) {
+export function StorylinePanel({ bookId, refreshKey = 0 }: { bookId: string; refreshKey?: number }) {
   const [storyline, setStoryline] = useState<StorylineData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -35,7 +35,7 @@ export function StorylinePanel({ bookId }: { bookId: string }) {
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookId]);
+  }, [bookId, refreshKey]);
 
   return (
     <section className="novel-storyline" aria-label="故事线">
